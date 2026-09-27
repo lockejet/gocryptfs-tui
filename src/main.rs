@@ -9,7 +9,7 @@ use ratatui::{
     backend::{Backend, CrosstermBackend},
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::{Line, Span, Text},
+    text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
     Frame, Terminal,
 };
@@ -20,11 +20,11 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const APP_NAME: &str = env!("CARGO_PKG_NAME");
 const CLI_NAME: &str = "gocryptfs-cli";
-const MAX_OUTPUT: usize = 200;
+const MAX_OUTPUT: usize = 500;
 
 // ============================================================
 // 数据模型
@@ -69,6 +69,10 @@ fn cli_path() -> String {
     std::env::var("GOCRYPTFS_CLI").unwrap_or_else(|_| CLI_NAME.to_string())
 }
 
+fn get_startup_command() -> String {
+    std::env::args().collect::<Vec<_>>().join(" ")
+}
+
 fn get_config_path() -> String {
     if let Ok(o) = Command::new(cli_path()).arg("config").output() {
         if o.status.success() {
@@ -99,12 +103,9 @@ fn load_vaults(config: &str) -> Result<Vec<Vault>, String> {
     let out = Command::new(cli_path())
         .args(["-c", config, "list", "--json"])
         .output()
-        .map_err(|e| format!("执行 CLI 失败: {}（检查 PATH 或 GOCRYPTFS_CLI）", e))?;
+        .map_err(|e| format!("执行 CLI 失败: {}", e))?;
     if !out.status.success() {
-        return Err(format!(
-            "CLI 错误: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
+        return Err(format!("CLI 错误: {}", String::from_utf8_lossy(&out.stderr).trim()));
     }
     let resp: CliListResponse = serde_json::from_slice(&out.stdout)
         .map_err(|e| format!("JSON 解析失败: {}", e))?;
@@ -116,6 +117,7 @@ fn load_vaults(config: &str) -> Result<Vec<Vault>, String> {
 
 #[derive(Debug)]
 enum CliEvent {
+    Pid(u32),
     Stdout(String),
     Stderr(String),
     Progress { pct: u8, done: u64, total: u64 },
@@ -161,6 +163,8 @@ fn spawn_cli_task(args: Vec<String>, password: Option<String>) -> Receiver<CliEv
                 return;
             }
         };
+        let _ = tx.send(CliEvent::Pid(child.id()));
+
         if let Some(pw) = password {
             if let Some(mut stdin) = child.stdin.take() {
                 let _ = writeln!(stdin, "{}", pw);
@@ -206,12 +210,11 @@ fn spawn_cli_task(args: Vec<String>, password: Option<String>) -> Receiver<CliEv
     rx
 }
 
-/// 同步执行 CLI 并返回 stdout（用于 l/t 这种快速命令）
-fn cli_sync(args: &[&str]) -> Result<String, String> {
-    let out = Command::new(cli_path())
+fn sys_run(cmd: &str, args: &[&str]) -> Result<String, String> {
+    let out = Command::new(cmd)
         .args(args)
         .output()
-        .map_err(|e| format!("执行 CLI 失败: {}", e))?;
+        .map_err(|e| format!("执行 {} 失败: {}", cmd, e))?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
         return Err(if stderr.is_empty() {
@@ -223,6 +226,18 @@ fn cli_sync(args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
+fn kill_pid_tree(pid: u32) {
+    let _ = Command::new("pkill")
+        .arg("-TERM")
+        .arg("-P")
+        .arg(pid.to_string())
+        .spawn();
+    let _ = Command::new("kill")
+        .arg("-TERM")
+        .arg(pid.to_string())
+        .spawn();
+}
+
 // ============================================================
 // 状态定义
 // ============================================================
@@ -231,12 +246,15 @@ fn cli_sync(args: &[&str]) -> Result<String, String> {
 enum Page {
     Mount,
     Create,
+    Remove,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum CreateMode {
-    Create,
-    Remove,
+enum Focus {
+    List,
+    Detail,
+    Dir,
+    Output,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -253,6 +271,13 @@ enum Overlay {
     Settings { tab: SettingsTab, scope_index: usize },
     History { selected: usize },
     Message(String),
+    ConfirmUmount { vault_index: usize },
+}
+
+#[derive(Debug, Clone, Default)]
+struct ScrollState {
+    v: u16,
+    h: u16,
 }
 
 struct PasswordInput {
@@ -263,7 +288,16 @@ struct PasswordInput {
 
 struct BackgroundTask {
     description: String,
+    status: TaskStatus,
+    pid: Option<u32>,
     rx: Receiver<CliEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum TaskStatus {
+    Running,
+    Done,
+    Failed(i32),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -277,6 +311,7 @@ enum WizardStep {
     ConfigPaths,
     EnterPassword,
     Running,
+    ConfirmDelete,
     Done,
     Failed(String),
 }
@@ -299,6 +334,7 @@ struct Wizard {
     password: String,
     password_confirm: String,
     confirming: bool,
+    delete_confirm_text: String,
     progress: Option<(u8, u64, u64)>,
     checks: HashMap<String, String>,
     error: Option<String>,
@@ -314,56 +350,83 @@ impl Wizard {
     }
 }
 
-/// 目录内容展示（l/t 同步结果）
-struct DirView {
+#[derive(Clone)]
+struct DirSection {
     title: String,
     lines: Vec<String>,
+}
+
+#[derive(Clone, Default)]
+struct DirView {
+    sections: Vec<DirSection>,
     scroll: u16,
+    mode: String,
 }
 
 struct App {
     page: Page,
-    create_mode: CreateMode,
+    focus: Focus,
     overlay: Option<Overlay>,
-    vaults: Vec<Vault>,
-    list_state: ListState,
-    pending: Vec<String>,
-    pending_state: ListState,
     wizard: Option<Wizard>,
+
+    vaults: Vec<Vault>,
+    vault_list_state: ListState,
+    vault_confirmed: Option<usize>,
+    pending: Vec<String>,
+    pending_list_state: ListState,
+    pending_confirmed: Option<usize>,
+
+    dir_view: DirView,
+    detail_scroll: ScrollState,
+    dir_scroll: ScrollState,
+    output_scroll: ScrollState,
     output: Vec<String>,
+
     status: String,
     config: String,
+    startup_command: String,
     password_input: Option<PasswordInput>,
     task: Option<BackgroundTask>,
     should_quit: bool,
     editor_request: bool,
     scope_names: Vec<String>,
     history_entries: Vec<HistoryEntry>,
-    dir_view: Option<DirView>,
+
+    last_ctrl_d: Option<Instant>,
+    ctrl_d_count: u8,
 }
 
 impl App {
     fn new() -> Self {
         let config = get_config_path();
+        let startup_command = get_startup_command();
         let mut app = App {
             page: Page::Mount,
-            create_mode: CreateMode::Create,
+            focus: Focus::List,
             overlay: None,
-            vaults: Vec::new(),
-            list_state: ListState::default(),
-            pending: Vec::new(),
-            pending_state: ListState::default(),
             wizard: None,
+            vaults: Vec::new(),
+            vault_list_state: ListState::default(),
+            vault_confirmed: None,
+            pending: Vec::new(),
+            pending_list_state: ListState::default(),
+            pending_confirmed: None,
+            dir_view: DirView::default(),
+            detail_scroll: ScrollState::default(),
+            dir_scroll: ScrollState::default(),
+            output_scroll: ScrollState::default(),
             output: Vec::new(),
             status: "就绪".to_string(),
             config: config.clone(),
+            startup_command,
             password_input: None,
             task: None,
             should_quit: false,
             editor_request: false,
             scope_names: vec!["全局".to_string()],
             history_entries: Vec::new(),
-            dir_view: None,
+            last_ctrl_d: None,
+            ctrl_d_count: 0,
         };
         app.add_output(format!("{} 启动", APP_NAME));
         app.add_output(format!("CLI:  {}", cli_path()));
@@ -379,7 +442,7 @@ impl App {
                     app.vaults = vaults;
                     app.add_output(format!("加载 {} 个卷", n));
                     if n > 0 {
-                        app.list_state.select(Some(0));
+                        app.vault_list_state.select(Some(0));
                     }
                 }
                 Err(e) => app.add_output(format!("加载失败: {}", e)),
@@ -397,6 +460,8 @@ impl App {
             let excess = self.output.len() - MAX_OUTPUT;
             self.output.drain(0..excess);
         }
+        let h = self.output.len().saturating_sub(7) as u16;
+        self.output_scroll.v = h;
     }
 
     fn update_scope_names(&mut self) {
@@ -415,11 +480,11 @@ impl App {
             Ok(vaults) => {
                 self.vaults = vaults;
                 if !self.vaults.is_empty() {
-                    let cur = self.list_state.selected().unwrap_or(0);
+                    let cur = self.vault_list_state.selected().unwrap_or(0);
                     let idx = cur.min(self.vaults.len() - 1);
-                    self.list_state.select(Some(idx));
+                    self.vault_list_state.select(Some(idx));
                 } else {
-                    self.list_state.select(None);
+                    self.vault_list_state.select(None);
                 }
                 self.update_scope_names();
             }
@@ -462,37 +527,75 @@ impl App {
             }
             self.pending = dirs;
             if !self.pending.is_empty() {
-                self.pending_state.select(Some(0));
+                self.pending_list_state.select(Some(0));
             } else {
-                self.pending_state.select(None);
+                self.pending_list_state.select(None);
             }
         }
     }
 
     fn selected_vault(&self) -> Option<&Vault> {
-        self.list_state.selected().and_then(|i| self.vaults.get(i))
+        self.vault_list_state.selected().and_then(|i| self.vaults.get(i))
     }
 
-    fn next(&mut self) {
+    fn next_vault(&mut self) {
         if self.vaults.is_empty() {
             return;
         }
-        let i = match self.list_state.selected() {
+        let i = match self.vault_list_state.selected() {
             Some(i) => (i + 1) % self.vaults.len(),
             None => 0,
         };
-        self.list_state.select(Some(i));
+        self.vault_list_state.select(Some(i));
+        self.vault_confirmed = None;
+        self.dir_view = DirView::default();
+        self.dir_scroll = ScrollState::default();
+        self.detail_scroll = ScrollState::default();
     }
 
-    fn previous(&mut self) {
+    fn previous_vault(&mut self) {
         if self.vaults.is_empty() {
             return;
         }
-        let i = match self.list_state.selected() {
+        let i = match self.vault_list_state.selected() {
             Some(0) | None => self.vaults.len() - 1,
             Some(i) => i - 1,
         };
-        self.list_state.select(Some(i));
+        self.vault_list_state.select(Some(i));
+        self.vault_confirmed = None;
+        self.dir_view = DirView::default();
+        self.dir_scroll = ScrollState::default();
+        self.detail_scroll = ScrollState::default();
+    }
+
+    fn next_pending(&mut self) {
+        if self.pending.is_empty() {
+            return;
+        }
+        let i = match self.pending_list_state.selected() {
+            Some(i) => (i + 1) % self.pending.len(),
+            None => 0,
+        };
+        self.pending_list_state.select(Some(i));
+        self.pending_confirmed = None;
+        self.dir_view = DirView::default();
+        self.dir_scroll = ScrollState::default();
+        self.detail_scroll = ScrollState::default();
+    }
+
+    fn previous_pending(&mut self) {
+        if self.pending.is_empty() {
+            return;
+        }
+        let i = match self.pending_list_state.selected() {
+            Some(0) | None => self.pending.len() - 1,
+            Some(i) => i - 1,
+        };
+        self.pending_list_state.select(Some(i));
+        self.pending_confirmed = None;
+        self.dir_view = DirView::default();
+        self.dir_scroll = ScrollState::default();
+        self.detail_scroll = ScrollState::default();
     }
 
     fn start_mount(&mut self) {
@@ -506,7 +609,6 @@ impl App {
         if let Some(v) = self.selected_vault() {
             if v.mounted {
                 self.status = format!("{} 已挂载", name);
-                self.add_output(format!("跳过: {} 已挂载", name));
                 return;
             }
         }
@@ -518,94 +620,215 @@ impl App {
         self.status = "输入密码后按 Enter".to_string();
     }
 
-    fn start_umount(&mut self) {
-        let name = match self.selected_vault() {
-            Some(v) => v.name.clone(),
+    fn trigger_umount_or_confirm(&mut self) {
+        let idx = match self.vault_list_state.selected() {
+            Some(i) => i,
             None => {
                 self.status = "无卷可选".to_string();
                 return;
             }
         };
-        if let Some(v) = self.selected_vault() {
-            if !v.mounted {
-                self.status = format!("{} 未挂载", name);
-                self.add_output(format!("跳过: {} 未挂载", name));
+        let mounted = self.vaults.get(idx).map(|v| v.mounted).unwrap_or(false);
+        if !mounted {
+            self.status = "卷未挂载".to_string();
+            return;
+        }
+        self.overlay = Some(Overlay::ConfirmUmount { vault_index: idx });
+    }
+
+    fn enter_action(&mut self) {
+        let idx = match self.vault_list_state.selected() {
+            Some(i) => i,
+            None => {
+                self.status = "无卷可选".to_string();
                 return;
             }
+        };
+        if self.vault_confirmed != Some(idx) {
+            self.status = "请先按 Space 选中".to_string();
+            return;
         }
+        let mounted = self.vaults.get(idx).map(|v| v.mounted).unwrap_or(false);
+        if mounted {
+            self.overlay = Some(Overlay::ConfirmUmount { vault_index: idx });
+        } else {
+            self.start_mount();
+        }
+    }
+
+    fn enter_create_wizard(&mut self) {
+        let idx = match self.pending_list_state.selected() {
+            Some(i) => i,
+            None => {
+                self.status = "无待处理目录".to_string();
+                return;
+            }
+        };
+        if self.pending_confirmed != Some(idx) {
+            self.status = "请先按 Space 选中".to_string();
+            return;
+        }
+        self.start_create_wizard();
+    }
+
+    fn enter_remove_wizard(&mut self) {
+        let idx = match self.vault_list_state.selected() {
+            Some(i) => i,
+            None => {
+                self.status = "无卷可选".to_string();
+                return;
+            }
+        };
+        if self.vault_confirmed != Some(idx) {
+            self.status = "请先按 Space 选中".to_string();
+            return;
+        }
+        self.start_remove_wizard();
+    }
+
+    fn start_umount_confirmed(&mut self, idx: usize) {
+        let name = match self.vaults.get(idx) {
+            Some(v) => v.name.clone(),
+            None => return,
+        };
+        self.vault_confirmed = None;
         self.start_task(
             format!("卸载 {}", name),
-            vec![
-                "-c".into(),
-                self.config.clone(),
-                "umount".into(),
-                name.clone(),
-            ],
+            vec!["-c".into(), self.config.clone(), "umount".into(), name.clone()],
             None,
         );
     }
 
-    fn list_dir(&mut self) {
-        let vault = match self.selected_vault() {
-            Some(v) => v.clone(),
-            None => {
-                self.status = "无卷可选".to_string();
-                return;
-            }
-        };
-        if !vault.mounted {
-            self.status = format!("{} 未挂载", vault.name);
-            self.add_output(format!("跳过: {} 未挂载", vault.name));
-            return;
-        }
-        self.add_output(format!("执行: gocryptfs-cli ls {}", vault.name));
-        match cli_sync(&["-c", &self.config, "ls", &vault.name]) {
-            Ok(text) => {
-                let lines: Vec<String> = text.lines().map(|s| s.to_string()).collect();
-                let n = lines.len();
-                self.dir_view = Some(DirView {
-                    title: format!(" {} 列表 (ls -la, {} 行) ", vault.name, n),
-                    lines,
+    fn load_dir_view(&mut self, use_tree: bool) {
+        let mode = if use_tree { "tree" } else { "ls" };
+        let cmd = if use_tree { "tree" } else { "ls" };
+        let extra_args: Vec<&str> = if use_tree { vec!["-L", "2"] } else { vec!["-la"] };
+
+        match self.page {
+            Page::Mount | Page::Remove => {
+                let vault = match self.selected_vault() {
+                    Some(v) => v.clone(),
+                    None => {
+                        self.status = "无卷可选".to_string();
+                        return;
+                    }
+                };
+                let mut sections = Vec::new();
+                sections.push(self.make_section(
+                    &format!("【加密路径】{}", vault.path),
+                    &vault.path,
+                    cmd,
+                    &extra_args,
+                    false,
+                ));
+                sections.push(self.make_section(
+                    &format!("【挂载点】{}", vault.mount_point),
+                    &vault.mount_point,
+                    cmd,
+                    &extra_args,
+                    !vault.mounted,
+                ));
+                self.dir_view = DirView {
+                    sections,
                     scroll: 0,
-                });
-                self.status = format!("已获取 {} 的列表", vault.name);
+                    mode: mode.to_string(),
+                };
+                self.dir_scroll = ScrollState::default();
+                self.focus = Focus::Dir;
+                self.status = format!("已加载 {} 的目录 ({})", vault.name, mode);
             }
-            Err(e) => {
-                self.status = format!("列表失败: {}", e);
-                self.add_output(format!("[FAIL] ls: {}", e));
+            Page::Create => {
+                let idx = match self.pending_list_state.selected() {
+                    Some(i) => i,
+                    None => {
+                        self.status = "无待处理目录".to_string();
+                        return;
+                    }
+                };
+                let source = self.pending[idx].clone();
+                let name = std::path::Path::new(&source)
+                    .file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "vault".to_string());
+                let cipher = format!(
+                    "{}/.cipher.d/{}",
+                    std::path::Path::new(&source)
+                        .parent()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_else(|| ".".to_string()),
+                    name
+                );
+                let tmp_mount = format!("{}.mount_tmp", source);
+
+                let mut sections = Vec::new();
+                sections.push(self.make_section(
+                    &format!("【加密目录】{}", cipher),
+                    &cipher,
+                    cmd,
+                    &extra_args,
+                    false,
+                ));
+                sections.push(self.make_section(
+                    &format!("【临时挂载点】{}", tmp_mount),
+                    &tmp_mount,
+                    cmd,
+                    &extra_args,
+                    false,
+                ));
+                sections.push(self.make_section(
+                    &format!("【挂载点（源目录）】{}", source),
+                    &source,
+                    cmd,
+                    &extra_args,
+                    false,
+                ));
+                self.dir_view = DirView {
+                    sections,
+                    scroll: 0,
+                    mode: mode.to_string(),
+                };
+                self.dir_scroll = ScrollState::default();
+                self.focus = Focus::Dir;
+                self.status = format!("已加载 {} 的目录 ({})", name, mode);
             }
         }
     }
 
-    fn tree_dir(&mut self) {
-        let vault = match self.selected_vault() {
-            Some(v) => v.clone(),
-            None => {
-                self.status = "无卷可选".to_string();
-                return;
+    fn make_section(
+        &self,
+        title: &str,
+        path: &str,
+        cmd: &str,
+        extra_args: &[&str],
+        placeholder_missing: bool,
+    ) -> DirSection {
+        let mut lines = Vec::new();
+        let path_obj = std::path::Path::new(path);
+
+        if !path_obj.exists() {
+            lines.push("（路径不存在）".to_string());
+        } else if placeholder_missing {
+            lines.push("（未挂载）".to_string());
+        } else {
+            let mut args: Vec<&str> = extra_args.to_vec();
+            args.push(path);
+            match sys_run(cmd, &args) {
+                Ok(text) => {
+                    for l in text.lines() {
+                        lines.push(l.to_string());
+                    }
+                    if lines.is_empty() {
+                        lines.push("（空）".to_string());
+                    }
+                }
+                Err(e) => {
+                    lines.push(format!("（读取失败: {}）", e));
+                }
             }
-        };
-        if !vault.mounted {
-            self.status = format!("{} 未挂载", vault.name);
-            self.add_output(format!("跳过: {} 未挂载", vault.name));
-            return;
         }
-        self.add_output(format!("执行: gocryptfs-cli tree {}", vault.name));
-        match cli_sync(&["-c", &self.config, "tree", &vault.name]) {
-            Ok(text) => {
-                let lines: Vec<String> = text.lines().map(|s| s.to_string()).collect();
-                let n = lines.len();
-                self.dir_view = Some(DirView {
-                    title: format!(" {} 树状 (tree, {} 行) ", vault.name, n),
-                    lines,
-                    scroll: 0,
-                });
-                self.status = format!("已获取 {} 的树状", vault.name);
-            }
-            Err(e) => {
-                self.status = format!("树状失败: {}", e);
-                self.add_output(format!("[FAIL] tree: {}", e));
-            }
+        DirSection {
+            title: title.to_string(),
+            lines,
         }
     }
 
@@ -619,6 +842,8 @@ impl App {
         let rx = spawn_cli_task(args, password);
         self.task = Some(BackgroundTask {
             description: desc,
+            status: TaskStatus::Running,
+            pid: None,
             rx,
         });
     }
@@ -633,6 +858,11 @@ impl App {
         }
         for event in events {
             match event {
+                CliEvent::Pid(pid) => {
+                    if let Some(task) = &mut self.task {
+                        task.pid = Some(pid);
+                    }
+                }
                 CliEvent::Stdout(line) | CliEvent::Stderr(line) => {
                     if !line.is_empty() {
                         self.add_output(line);
@@ -653,7 +883,13 @@ impl App {
         }
         if let Some(code) = done_code {
             let desc = self.task.as_ref().map(|t| t.description.clone());
-            self.task = None;
+            if let Some(task) = &mut self.task {
+                task.status = if code == 0 {
+                    TaskStatus::Done
+                } else {
+                    TaskStatus::Failed(code)
+                };
+            }
             if let Some(desc) = desc {
                 if code == 0 {
                     self.status = format!("完成: {}", desc);
@@ -667,9 +903,29 @@ impl App {
                     if let Some(w) = &mut self.wizard {
                         w.step = WizardStep::Failed(format!("CLI 退出码: {}", code));
                     }
+                    if code == 2 {
+                        self.overlay = Some(Overlay::Message("密码错误".to_string()));
+                    }
                 }
             }
             self.reload_vaults();
+        }
+    }
+
+    fn interrupt_task(&mut self) {
+        if let Some(task) = &self.task {
+            if let Some(pid) = task.pid {
+                kill_pid_tree(pid);
+                std::thread::sleep(Duration::from_millis(300));
+                self.add_output(format!("已中断任务: {} (PID {})", task.description, pid));
+                self.status = "已中断".to_string();
+            } else {
+                self.status = "任务尚未启动 PID".to_string();
+            }
+        }
+        self.task = None;
+        if let Some(w) = &mut self.wizard {
+            w.step = WizardStep::Failed("用户中断".to_string());
         }
     }
 
@@ -690,17 +946,13 @@ impl App {
     }
 
     fn start_create_wizard(&mut self) {
-        self.page = Page::Create;
-        self.create_mode = CreateMode::Create;
-
         if self.pending.is_empty() {
             self.status = "待处理目录为空（按 e 编辑配置的 pending 段）".to_string();
-            self.add_output("待处理目录为空，请编辑配置文件的 pending 段".to_string());
             return;
         }
-        let idx = self.pending_state.selected().unwrap_or(0);
+        let idx = self.pending_list_state.selected().unwrap_or(0);
         if idx >= self.pending.len() {
-            self.pending_state.select(Some(0));
+            self.pending_list_state.select(Some(0));
             return self.start_create_wizard();
         }
         let source = self.pending[idx].clone();
@@ -719,6 +971,7 @@ impl App {
         let tmp_mount = format!("{}.mount_tmp", source);
         let keep_source_cfg = self.read_setting("create.keep_source", "false") == "true";
 
+        self.pending_confirmed = None;
         self.wizard = Some(Wizard {
             direction: WizardDirection::Create,
             step: WizardStep::ConfigPaths,
@@ -737,6 +990,7 @@ impl App {
             password: String::new(),
             password_confirm: String::new(),
             confirming: false,
+            delete_confirm_text: String::new(),
             progress: None,
             checks: HashMap::new(),
             error: None,
@@ -746,20 +1000,17 @@ impl App {
     }
 
     fn start_remove_wizard(&mut self) {
-        self.page = Page::Create;
-        self.create_mode = CreateMode::Remove;
-
         let vault = match self.selected_vault() {
             Some(v) => v.clone(),
             None => {
                 self.status = "无卷可选".to_string();
-                self.add_output("无卷可选，请先切到 Tab1 查看卷列表".to_string());
                 return;
             }
         };
         let restore_cfg = self.read_setting("remove.restore", "true") == "true";
         let delete_cipher_cfg = self.read_setting("remove.direct_delete_cipher", "false") == "true";
 
+        self.vault_confirmed = None;
         self.wizard = Some(Wizard {
             direction: WizardDirection::Remove,
             step: WizardStep::ConfigPaths,
@@ -778,6 +1029,7 @@ impl App {
             password: String::new(),
             password_confirm: String::new(),
             confirming: false,
+            delete_confirm_text: String::new(),
             progress: None,
             checks: HashMap::new(),
             error: None,
@@ -807,6 +1059,16 @@ impl App {
                     self.wizard = Some(wizard);
                     return;
                 }
+                // 删除方向：单次密码，直接进 DELETE 确认
+                if wizard.direction == WizardDirection::Remove {
+                    wizard.step = WizardStep::ConfirmDelete;
+                    wizard.delete_confirm_text.clear();
+                    wizard.error = None;
+                    self.wizard = Some(wizard);
+                    self.status = "输入 DELETE 确认".to_string();
+                    return;
+                }
+                // 创建方向：两次密码确认
                 if wizard.password != wizard.password_confirm {
                     wizard.error = Some("两次密码不一致".to_string());
                     wizard.confirming = false;
@@ -814,64 +1076,15 @@ impl App {
                     self.wizard = Some(wizard);
                     return;
                 }
-                let password = wizard.password.clone();
-                wizard.step = WizardStep::Running;
-                wizard.progress = None;
-                wizard.checks.clear();
-                wizard.error = None;
-
-                let args = match wizard.direction {
-                    WizardDirection::Create => {
-                        let mut a = vec![
-                            "-c".to_string(),
-                            self.config.clone(),
-                            "create".to_string(),
-                            wizard.source.clone(),
-                            "--name".to_string(),
-                            wizard.name.clone(),
-                            "--cipher".to_string(),
-                            wizard.cipher.clone(),
-                            "--yes".to_string(),
-                        ];
-                        if wizard.dry_run {
-                            a.push("--dry-run".to_string());
-                        }
-                        if wizard.keep_source {
-                            a.push("--keep-source".to_string());
-                        } else {
-                            a.push("--no-keep-source".to_string());
-                        }
-                        a
-                    }
-                    WizardDirection::Remove => {
-                        let mut a = vec![
-                            "-c".to_string(),
-                            self.config.clone(),
-                            "remove".to_string(),
-                            wizard.vault_name.clone(),
-                            "--yes".to_string(),
-                        ];
-                        if wizard.dry_run {
-                            a.push("--dry-run".to_string());
-                        }
-                        if !wizard.restore {
-                            a.push("--no-restore".to_string());
-                        }
-                        if wizard.delete_cipher {
-                            a.push("--delete-cipher".to_string());
-                        } else {
-                            a.push("--keep-cipher".to_string());
-                        }
-                        a
-                    }
-                };
-                let desc = match wizard.direction {
-                    WizardDirection::Create => format!("创建 {}", wizard.name),
-                    WizardDirection::Remove => format!("删除 {}", wizard.vault_name),
-                };
-                self.wizard = Some(wizard);
-                self.start_task(desc, args, Some(password));
-                self.status = "执行中...".to_string();
+                self.wizard_execute(wizard);
+            }
+            WizardStep::ConfirmDelete => {
+                if wizard.delete_confirm_text != "DELETE" {
+                    wizard.error = Some("请输入大写 DELETE 以确认".to_string());
+                    self.wizard = Some(wizard);
+                    return;
+                }
+                self.wizard_execute(wizard);
             }
             WizardStep::Running => {
                 self.wizard = Some(wizard);
@@ -883,6 +1096,67 @@ impl App {
                 self.reload_pending();
             }
         }
+    }
+
+    fn wizard_execute(&mut self, mut wizard: Wizard) {
+        let password = wizard.password.clone();
+        wizard.step = WizardStep::Running;
+        wizard.progress = None;
+        wizard.checks.clear();
+        wizard.error = None;
+
+        let args = match wizard.direction {
+            WizardDirection::Create => {
+                let mut a = vec![
+                    "-c".to_string(),
+                    self.config.clone(),
+                    "create".to_string(),
+                    wizard.source.clone(),
+                    "--name".to_string(),
+                    wizard.name.clone(),
+                    "--cipher".to_string(),
+                    wizard.cipher.clone(),
+                    "--yes".to_string(),
+                ];
+                if wizard.dry_run {
+                    a.push("--dry-run".to_string());
+                }
+                if wizard.keep_source {
+                    a.push("--keep-source".to_string());
+                } else {
+                    a.push("--no-keep-source".to_string());
+                }
+                a
+            }
+            WizardDirection::Remove => {
+                let mut a = vec![
+                    "-c".to_string(),
+                    self.config.clone(),
+                    "remove".to_string(),
+                    wizard.vault_name.clone(),
+                    "--yes".to_string(),
+                ];
+                if wizard.dry_run {
+                    a.push("--dry-run".to_string());
+                }
+                if !wizard.restore {
+                    a.push("--no-restore".to_string());
+                }
+                if wizard.delete_cipher {
+                    a.push("--delete-cipher".to_string());
+                } else {
+                    a.push("--keep-cipher".to_string());
+                }
+                a
+            }
+        };
+        let desc = match wizard.direction {
+            WizardDirection::Create => format!("创建 {}", wizard.name),
+            WizardDirection::Remove => format!("删除 {}", wizard.vault_name),
+        };
+        self.wizard = Some(wizard);
+        self.start_task(desc, args, Some(password));
+        self.status = "执行中...".to_string();
     }
 
     fn wizard_cancel(&mut self) {
@@ -922,6 +1196,25 @@ impl App {
         }
         self.wizard = Some(wizard);
     }
+
+    fn handle_ctrl_d(&mut self) {
+        let now = Instant::now();
+        let is_continuous = self
+            .last_ctrl_d
+            .map(|t| now.duration_since(t) < Duration::from_secs(2))
+            .unwrap_or(false);
+        if is_continuous {
+            self.ctrl_d_count += 1;
+        } else {
+            self.ctrl_d_count = 1;
+        }
+        self.last_ctrl_d = Some(now);
+        if self.ctrl_d_count >= 3 {
+            self.should_quit = true;
+        } else {
+            self.status = format!("再按 Ctrl+D {} 次强制退出", 3 - self.ctrl_d_count);
+        }
+    }
 }
 
 // ============================================================
@@ -938,7 +1231,18 @@ fn is_delete_key(code: KeyCode, mods: KeyModifiers) -> bool {
 }
 
 fn handle_key(app: &mut App, key: KeyCode, mods: KeyModifiers) {
-    // ---- 密码输入模态 ----
+    // Ctrl+C 中断
+    if mods.contains(KeyModifiers::CONTROL) && key == KeyCode::Char('c') {
+        app.interrupt_task();
+        return;
+    }
+    // Ctrl+D 连按退出
+    if mods.contains(KeyModifiers::CONTROL) && key == KeyCode::Char('d') {
+        app.handle_ctrl_d();
+        return;
+    }
+
+    // 密码输入模态
     if let Some(pw) = &mut app.password_input {
         if is_delete_key(key, mods) {
             pw.buffer.pop();
@@ -973,38 +1277,7 @@ fn handle_key(app: &mut App, key: KeyCode, mods: KeyModifiers) {
         return;
     }
 
-    // ---- 目录视图滚动（无浮层/向导时） ----
-    if app.dir_view.is_some() && app.overlay.is_none() && app.wizard.is_none() {
-        match key {
-            KeyCode::PageDown => {
-                if let Some(dv) = &mut app.dir_view {
-                    dv.scroll = dv.scroll.saturating_add(10);
-                }
-                return;
-            }
-            KeyCode::PageUp => {
-                if let Some(dv) = &mut app.dir_view {
-                    dv.scroll = dv.scroll.saturating_sub(10);
-                }
-                return;
-            }
-            KeyCode::Char('g') => {
-                if let Some(dv) = &mut app.dir_view {
-                    dv.scroll = 0;
-                }
-                return;
-            }
-            KeyCode::Char('G') => {
-                if let Some(dv) = &mut app.dir_view {
-                    dv.scroll = dv.lines.len().saturating_sub(1) as u16;
-                }
-                return;
-            }
-            _ => {}
-        }
-    }
-
-    // ---- 向导 ----
+    // 向导
     if app.wizard.is_some() {
         let step = app.wizard.as_ref().unwrap().step.clone();
         match step {
@@ -1043,8 +1316,8 @@ fn handle_key(app: &mut App, key: KeyCode, mods: KeyModifiers) {
                 match key {
                     KeyCode::Esc => app.wizard_cancel(),
                     KeyCode::Enter => {
-                        let confirming =
-                            app.wizard.as_ref().map(|w| w.confirming).unwrap_or(false);
+                        let confirming = app.wizard.as_ref().map(|w| w.confirming).unwrap_or(false);
+                        let direction = app.wizard.as_ref().map(|w| w.direction);
                         if !confirming {
                             let password = app
                                 .wizard
@@ -1055,7 +1328,11 @@ fn handle_key(app: &mut App, key: KeyCode, mods: KeyModifiers) {
                                 if let Some(w) = &mut app.wizard {
                                     w.error = Some("密码不能为空".to_string());
                                 }
+                            } else if direction == Some(WizardDirection::Remove) {
+                                // 删除方向：一次密码，直接进下一步
+                                app.wizard_advance();
                             } else if let Some(w) = &mut app.wizard {
+                                // 创建方向：进入确认
                                 w.confirming = true;
                                 w.error = None;
                             }
@@ -1075,9 +1352,27 @@ fn handle_key(app: &mut App, key: KeyCode, mods: KeyModifiers) {
                     _ => {}
                 }
             }
+            WizardStep::ConfirmDelete => {
+                if is_delete_key(key, mods) {
+                    if let Some(w) = &mut app.wizard {
+                        w.delete_confirm_text.pop();
+                    }
+                    return;
+                }
+                match key {
+                    KeyCode::Esc => app.wizard_cancel(),
+                    KeyCode::Enter => app.wizard_advance(),
+                    KeyCode::Char(c) if !c.is_control() => {
+                        if let Some(w) = &mut app.wizard {
+                            w.delete_confirm_text.push(c);
+                        }
+                    }
+                    _ => {}
+                }
+            }
             WizardStep::Running => {
                 if key == KeyCode::Esc {
-                    app.status = "运行中无法中止".to_string();
+                    app.status = "运行中按 Ctrl+C 中断".to_string();
                 }
             }
             WizardStep::Done | WizardStep::Failed(_) => {
@@ -1087,7 +1382,7 @@ fn handle_key(app: &mut App, key: KeyCode, mods: KeyModifiers) {
         return;
     }
 
-    // ---- 浮层 ----
+    // 浮层
     if app.overlay.is_some() {
         let overlay = app.overlay.take().unwrap();
         match overlay {
@@ -1097,6 +1392,17 @@ fn handle_key(app: &mut App, key: KeyCode, mods: KeyModifiers) {
                 }
             }
             Overlay::Message(_) => {}
+            Overlay::ConfirmUmount { vault_index } => match key {
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    app.start_umount_confirmed(vault_index);
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                    app.status = "已取消卸载".to_string();
+                }
+                _ => {
+                    app.overlay = Some(Overlay::ConfirmUmount { vault_index });
+                }
+            },
             Overlay::Settings { tab, scope_index } => match key {
                 KeyCode::Esc => {}
                 KeyCode::Tab => {
@@ -1151,7 +1457,30 @@ fn handle_key(app: &mut App, key: KeyCode, mods: KeyModifiers) {
         return;
     }
 
-    // ---- 全局 ----
+    // Alt+1/2/3/4 焦点
+    if mods.contains(KeyModifiers::ALT) {
+        match key {
+            KeyCode::Char('1') => {
+                app.focus = Focus::List;
+                return;
+            }
+            KeyCode::Char('2') => {
+                app.focus = Focus::Detail;
+                return;
+            }
+            KeyCode::Char('3') => {
+                app.focus = Focus::Dir;
+                return;
+            }
+            KeyCode::Char('4') => {
+                app.focus = Focus::Output;
+                return;
+            }
+            _ => {}
+        }
+    }
+
+    // 全局键
     match key {
         KeyCode::Char('q') => {
             app.should_quit = true;
@@ -1181,103 +1510,154 @@ fn handle_key(app: &mut App, key: KeyCode, mods: KeyModifiers) {
         KeyCode::Char('r') => {
             app.reload_vaults();
             app.reload_pending();
-            app.dir_view = None;
+            app.dir_view = DirView::default();
             app.status = "已刷新".to_string();
             return;
         }
         KeyCode::Tab | KeyCode::BackTab => {
             app.page = match app.page {
                 Page::Mount => Page::Create,
-                Page::Create => Page::Mount,
+                Page::Create => Page::Remove,
+                Page::Remove => Page::Mount,
             };
+            app.focus = Focus::List;
+            app.vault_confirmed = None;
+            app.pending_confirmed = None;
+            app.dir_view = DirView::default();
             app.status = match app.page {
-                Page::Mount => "挂载/卸载 页面".to_string(),
-                Page::Create => "创建/删除 页面".to_string(),
+                Page::Mount => "挂载/卸载".to_string(),
+                Page::Create => "创建加密".to_string(),
+                Page::Remove => "删除加密".to_string(),
             };
             return;
         }
         KeyCode::Char('1') => {
             app.page = Page::Mount;
-            app.status = "挂载/卸载 页面".to_string();
+            app.focus = Focus::List;
+            app.vault_confirmed = None;
+            app.pending_confirmed = None;
             return;
         }
         KeyCode::Char('2') => {
             app.page = Page::Create;
-            app.status = "创建/删除 页面".to_string();
+            app.focus = Focus::List;
+            app.vault_confirmed = None;
+            app.pending_confirmed = None;
+            return;
+        }
+        KeyCode::Char('3') => {
+            app.page = Page::Remove;
+            app.focus = Focus::List;
+            app.vault_confirmed = None;
+            app.pending_confirmed = None;
             return;
         }
         _ => {}
     }
 
-    // ---- 页面专属 ----
-    match app.page {
-        Page::Mount => match key {
-            KeyCode::Char('j') | KeyCode::Down => app.next(),
-            KeyCode::Char('k') | KeyCode::Up => app.previous(),
-            KeyCode::Char('m') | KeyCode::Char(' ') => app.start_mount(),
-            KeyCode::Char('u') => app.start_umount(),
-            KeyCode::Char('l') => app.list_dir(),
-            KeyCode::Char('t') => app.tree_dir(),
+    // 焦点专属
+    match app.focus {
+        Focus::List => match app.page {
+            Page::Mount => match key {
+                KeyCode::Char('j') | KeyCode::Down => app.next_vault(),
+                KeyCode::Char('k') | KeyCode::Up => app.previous_vault(),
+                KeyCode::Char(' ') => {
+                    if let Some(i) = app.vault_list_state.selected() {
+                        app.vault_confirmed = Some(i);
+                        app.status = "已选中（按 Enter 或 m 挂载/卸载）".to_string();
+                    }
+                }
+                KeyCode::Enter | KeyCode::Char('m') => app.enter_action(),
+                KeyCode::Char('u') => app.trigger_umount_or_confirm(),
+                KeyCode::Char('l') => app.load_dir_view(false),
+                KeyCode::Char('t') => app.load_dir_view(true),
+                KeyCode::Char('o') => {
+                    if let Some(v) = app.selected_vault() {
+                        let mp = v.mount_point.clone();
+                        let _ = Command::new("xdg-open").arg(&mp).spawn();
+                        app.status = format!("打开: {}", mp);
+                    }
+                }
+                _ => {}
+            },
+            Page::Create => match key {
+                KeyCode::Char('j') | KeyCode::Down => app.next_pending(),
+                KeyCode::Char('k') | KeyCode::Up => app.previous_pending(),
+                KeyCode::Char(' ') => {
+                    if let Some(i) = app.pending_list_state.selected() {
+                        app.pending_confirmed = Some(i);
+                        app.status = "已选中（按 Enter 进入创建向导）".to_string();
+                    }
+                }
+                KeyCode::Enter => app.enter_create_wizard(),
+                KeyCode::Char('l') => app.load_dir_view(false),
+                KeyCode::Char('t') => app.load_dir_view(true),
+                KeyCode::Char('a') => {
+                    app.status = "添加待处理目录（尚未实现，请编辑配置）".to_string();
+                }
+                _ => {}
+            },
+            Page::Remove => match key {
+                KeyCode::Char('j') | KeyCode::Down => app.next_vault(),
+                KeyCode::Char('k') | KeyCode::Up => app.previous_vault(),
+                KeyCode::Char(' ') => {
+                    if let Some(i) = app.vault_list_state.selected() {
+                        app.vault_confirmed = Some(i);
+                        app.status = "已选中（按 Enter 进入删除向导）".to_string();
+                    }
+                }
+                KeyCode::Enter => app.enter_remove_wizard(),
+                KeyCode::Char('l') => app.load_dir_view(false),
+                KeyCode::Char('t') => app.load_dir_view(true),
+                _ => {}
+            },
+        },
+        Focus::Detail => match key {
+            KeyCode::Up => app.detail_scroll.v = app.detail_scroll.v.saturating_sub(1),
+            KeyCode::Down => app.detail_scroll.v = app.detail_scroll.v.saturating_add(1),
+            KeyCode::Left => app.detail_scroll.h = app.detail_scroll.h.saturating_sub(4),
+            KeyCode::Right => app.detail_scroll.h = app.detail_scroll.h.saturating_add(4),
+            KeyCode::PageUp => app.detail_scroll.v = app.detail_scroll.v.saturating_sub(5),
+            KeyCode::PageDown => app.detail_scroll.v = app.detail_scroll.v.saturating_add(5),
+            KeyCode::Char('g') => app.detail_scroll.v = 0,
+            KeyCode::Char('G') => app.detail_scroll.v = u16::MAX / 2,
             _ => {}
         },
-        Page::Create => match key {
+        Focus::Dir => match key {
             KeyCode::Char('c') => {
-                app.create_mode = CreateMode::Create;
-                app.status = "创建 模式".to_string();
+                app.dir_view = DirView::default();
+                app.dir_scroll = ScrollState::default();
+                app.status = "已清空目录".to_string();
             }
-            KeyCode::Char('d') => {
-                app.create_mode = CreateMode::Remove;
-                app.status = "删除 模式".to_string();
+            KeyCode::Char('l') => app.load_dir_view(false),
+            KeyCode::Char('t') => app.load_dir_view(true),
+            KeyCode::Up => app.dir_scroll.v = app.dir_scroll.v.saturating_sub(1),
+            KeyCode::Down => app.dir_scroll.v = app.dir_scroll.v.saturating_add(1),
+            KeyCode::Left => app.dir_scroll.h = app.dir_scroll.h.saturating_sub(4),
+            KeyCode::Right => app.dir_scroll.h = app.dir_scroll.h.saturating_add(4),
+            KeyCode::PageUp => app.dir_scroll.v = app.dir_scroll.v.saturating_sub(10),
+            KeyCode::PageDown => app.dir_scroll.v = app.dir_scroll.v.saturating_add(10),
+            KeyCode::Char('g') => app.dir_scroll.v = 0,
+            KeyCode::Char('G') => {
+                let total: usize = app.dir_view.sections.iter().map(|s| s.lines.len() + 2).sum();
+                app.dir_scroll.v = total.saturating_sub(1) as u16;
             }
-            KeyCode::Char(' ') | KeyCode::Enter => {
-                if app.create_mode == CreateMode::Create {
-                    app.start_create_wizard();
-                } else {
-                    app.start_remove_wizard();
-                }
+            _ => {}
+        },
+        Focus::Output => match key {
+            KeyCode::Char('c') => {
+                app.output.clear();
+                app.output_scroll = ScrollState::default();
+                app.status = "已清空输出".to_string();
             }
-            KeyCode::Char('j') | KeyCode::Down => {
-                if app.create_mode == CreateMode::Create {
-                    if !app.pending.is_empty() {
-                        let i = app
-                            .pending_state
-                            .selected()
-                            .map(|i| (i + 1) % app.pending.len())
-                            .unwrap_or(0);
-                        app.pending_state.select(Some(i));
-                    }
-                } else {
-                    app.next();
-                }
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                if app.create_mode == CreateMode::Create {
-                    if !app.pending.is_empty() {
-                        let i = app
-                            .pending_state
-                            .selected()
-                            .map(|i| if i == 0 { app.pending.len() - 1 } else { i - 1 })
-                            .unwrap_or(0);
-                        app.pending_state.select(Some(i));
-                    }
-                } else {
-                    app.previous();
-                }
-            }
-            KeyCode::Char('l') => {
-                if app.create_mode == CreateMode::Remove {
-                    app.list_dir();
-                } else {
-                    app.status = "创建模式下不支持 l（请按 d 切到删除模式）".to_string();
-                }
-            }
-            KeyCode::Char('t') => {
-                if app.create_mode == CreateMode::Remove {
-                    app.tree_dir();
-                } else {
-                    app.status = "创建模式下不支持 t（请按 d 切到删除模式）".to_string();
-                }
-            }
+            KeyCode::Up => app.output_scroll.v = app.output_scroll.v.saturating_sub(1),
+            KeyCode::Down => app.output_scroll.v = app.output_scroll.v.saturating_add(1),
+            KeyCode::Left => app.output_scroll.h = app.output_scroll.h.saturating_sub(4),
+            KeyCode::Right => app.output_scroll.h = app.output_scroll.h.saturating_add(4),
+            KeyCode::PageUp => app.output_scroll.v = app.output_scroll.v.saturating_sub(10),
+            KeyCode::PageDown => app.output_scroll.v = app.output_scroll.v.saturating_add(10),
+            KeyCode::Char('g') => app.output_scroll.v = 0,
+            KeyCode::Char('G') => app.output_scroll.v = app.output.len().saturating_sub(1) as u16,
             _ => {}
         },
     }
@@ -1292,26 +1672,38 @@ fn ui(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),
-            Constraint::Min(5),
-            Constraint::Length(7),
             Constraint::Length(2),
+            Constraint::Length(1),
+            Constraint::Min(10),
+            Constraint::Length(7),
+            Constraint::Length(3),
         ])
         .split(area);
 
-    render_tab_bar(f, app, chunks[0]);
+    render_top_bar(f, app, chunks[0]);
+    render_tab_bar(f, app, chunks[1]);
+
+    let main_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+        .split(chunks[2]);
+
+    render_list(f, app, main_chunks[0]);
+
+    let right_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(main_chunks[1]);
+
+    render_detail(f, app, right_chunks[0]);
+    render_dir(f, app, right_chunks[1]);
+
+    render_output(f, app, chunks[3]);
+    render_status(f, app, chunks[4]);
 
     if app.wizard.is_some() {
-        render_wizard(f, app, chunks[1]);
-    } else {
-        match app.page {
-            Page::Mount => render_mount_page(f, app, chunks[1]),
-            Page::Create => render_create_page(f, app, chunks[1]),
-        }
+        render_wizard(f, app, chunks[2]);
     }
-
-    render_output(f, app, chunks[2]);
-    render_status(f, app, chunks[3]);
 
     if let Some(overlay) = &app.overlay {
         match overlay {
@@ -1323,6 +1715,9 @@ fn ui(f: &mut Frame, app: &mut App) {
                 render_history_overlay(f, &app.history_entries, *selected, area);
             }
             Overlay::Message(msg) => render_message_overlay(f, msg, area),
+            Overlay::ConfirmUmount { vault_index } => {
+                render_confirm_umount(f, app, *vault_index, area);
+            }
         }
     }
 
@@ -1331,114 +1726,180 @@ fn ui(f: &mut Frame, app: &mut App) {
     }
 }
 
-fn render_tab_bar(f: &mut Frame, app: &App, area: Rect) {
-    let (mount_style, create_style) = match app.page {
-        Page::Mount => (
-            Style::default()
-                .bg(Color::Yellow)
-                .fg(Color::Black)
-                .add_modifier(Modifier::BOLD),
-            Style::default().fg(Color::Gray),
-        ),
-        Page::Create => (
-            Style::default().fg(Color::Gray),
-            Style::default()
-                .bg(Color::Yellow)
-                .fg(Color::Black)
-                .add_modifier(Modifier::BOLD),
-        ),
-    };
+fn focus_border(focus: Focus, current: Focus) -> Style {
+    if focus == current {
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::White)
+    }
+}
 
-    let line = Line::from(vec![
-        Span::styled(" [1] 挂载/卸载 ", mount_style),
-        Span::raw("  "),
-        Span::styled(" [2] 创建/删除 ", create_style),
-        Span::raw("    "),
-        Span::styled("切换[Tab]", Style::default().fg(Color::Cyan)),
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        if max < 2 {
+            return "…".to_string();
+        }
+        let taken: String = s.chars().take(max - 1).collect();
+        format!("{}…", taken)
+    }
+}
+
+fn render_top_bar(f: &mut Frame, app: &App, area: Rect) {
+    let half = (area.width as usize).saturating_sub(12) / 2;
+    let cmd_str = truncate(&app.startup_command, half);
+    let cli_str = truncate(&cli_path(), half);
+    let cfg_str = truncate(&app.config, area.width as usize - 6);
+
+    let line1 = Line::from(vec![
+        Span::styled("命令: ", Style::default().fg(Color::Cyan)),
+        Span::raw(cmd_str),
     ]);
-
-    let para = Paragraph::new(line);
+    let line2 = Line::from(vec![
+        Span::styled("CLI:  ", Style::default().fg(Color::Cyan)),
+        Span::raw(cli_str),
+        Span::raw("  "),
+        Span::styled("配置: ", Style::default().fg(Color::Cyan)),
+        Span::raw(cfg_str),
+    ]);
+    let para = Paragraph::new(vec![line1, line2])
+        .style(Style::default().fg(Color::White).bg(Color::Black));
     f.render_widget(para, area);
 }
 
-fn render_mount_page(f: &mut Frame, app: &mut App, area: Rect) {
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
-        .split(area);
+fn render_tab_bar(f: &mut Frame, app: &App, area: Rect) {
+    let tab_style = |p: Page| {
+        if app.page == p {
+            Style::default()
+                .bg(Color::Yellow)
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Gray)
+        }
+    };
+    let line = Line::from(vec![
+        Span::styled(" [1] 挂载/卸载 ", tab_style(Page::Mount)),
+        Span::raw("  "),
+        Span::styled(" [2] 创建加密 ", tab_style(Page::Create)),
+        Span::raw("  "),
+        Span::styled(" [3] 删除加密 ", tab_style(Page::Remove)),
+        Span::raw("      "),
+        Span::styled("换页[Tab]", Style::default().fg(Color::Cyan)),
+    ]);
+    f.render_widget(Paragraph::new(line), area);
+}
 
-    let items: Vec<ListItem> = if app.vaults.is_empty() {
-        vec![ListItem::new(Span::styled(
-            "（无卷）",
-            Style::default().fg(Color::Gray),
-        ))]
-    } else {
-        app.vaults
-            .iter()
-            .map(|v| {
-                let icon = if v.mounted { "●" } else { "○" };
-                let color = if v.mounted { Color::Green } else { Color::Gray };
-                let lock = if v.locked { "🔒" } else { "  " };
-                ListItem::new(Line::from(vec![
-                    Span::styled(format!("{} ", icon), Style::default().fg(color)),
-                    Span::raw(&v.name),
-                    Span::raw("  "),
-                    Span::styled(lock.to_string(), Style::default().fg(Color::Yellow)),
-                ]))
-            })
-            .collect()
+fn render_list(f: &mut Frame, app: &mut App, area: Rect) {
+    let (items, title): (Vec<ListItem>, String) = match app.page {
+        Page::Mount | Page::Remove => {
+            let items: Vec<ListItem> = if app.vaults.is_empty() {
+                vec![ListItem::new(Span::styled(
+                    "（无卷）",
+                    Style::default().fg(Color::Gray),
+                ))]
+            } else {
+                app.vaults
+                    .iter()
+                    .enumerate()
+                    .map(|(i, v)| {
+                        let is_confirmed = app.vault_confirmed == Some(i);
+                        let prefix = if is_confirmed { "▶ " } else { "  " };
+                        let icon = if v.mounted { "●" } else { "○" };
+                        let icon_color = if v.mounted { Color::Green } else { Color::Gray };
+
+                        let name_style = if is_confirmed {
+                            Style::default()
+                                .fg(Color::Yellow)
+                                .add_modifier(Modifier::BOLD)
+                        } else if v.mounted {
+                            Style::default().fg(Color::White)
+                        } else {
+                            Style::default().fg(Color::Gray)
+                        };
+
+                        let lock = if v.locked { "🔒" } else { "  " };
+
+                        ListItem::new(Line::from(vec![
+                            Span::styled(prefix, Style::default().fg(Color::Yellow)),
+                            Span::styled(format!("{} ", icon), Style::default().fg(icon_color)),
+                            Span::styled(v.name.clone(), name_style),
+                            Span::raw("  "),
+                            Span::styled(lock.to_string(), Style::default()),
+                        ]))
+                    })
+                    .collect()
+            };
+            let title = if app.page == Page::Mount {
+                " 卷列表 "
+            } else {
+                " 加密卷列表 "
+            };
+            (items, title.to_string())
+        }
+        Page::Create => {
+            let items: Vec<ListItem> = if app.pending.is_empty() {
+                vec![ListItem::new(Span::styled(
+                    "（无待处理目录）",
+                    Style::default().fg(Color::Gray),
+                ))]
+            } else {
+                app.pending
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| {
+                        let is_confirmed = app.pending_confirmed == Some(i);
+                        let prefix = if is_confirmed { "▶ " } else { "  " };
+                        let name_style = if is_confirmed {
+                            Style::default()
+                                .fg(Color::Yellow)
+                                .add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::default().fg(Color::White)
+                        };
+                        ListItem::new(Line::from(vec![
+                            Span::styled(prefix, Style::default().fg(Color::Yellow)),
+                            Span::styled(p.clone(), name_style),
+                        ]))
+                    })
+                    .collect()
+            };
+            (items, " 待处理目录 ".to_string())
+        }
     };
 
-    let mut list_state = app.list_state.clone();
+    let mut list_state = if app.page == Page::Create {
+        app.pending_list_state.clone()
+    } else {
+        app.vault_list_state.clone()
+    };
+
     let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title(" 卷列表 "))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .border_style(focus_border(Focus::List, app.focus)),
+        )
         .highlight_style(
             Style::default()
                 .bg(Color::DarkGray)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("> ");
-    f.render_stateful_widget(list, chunks[0], &mut list_state);
-    app.list_state = list_state;
+    f.render_stateful_widget(list, area, &mut list_state);
 
-    // 右侧：如果 dir_view 有内容，上下分割
-    if let Some(dv) = &app.dir_view {
-        let right_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(7), Constraint::Min(3)])
-            .split(chunks[1]);
-
-        let detail_text = match app.selected_vault() {
-            Some(v) => {
-                let mounted_str = if v.mounted { "🔓 已挂载" } else { "🔒 未挂载" };
-                let mounted_color = if v.mounted { Color::Green } else { Color::Red };
-                Text::from(vec![
-                    Line::from(vec![
-                        Span::styled("名称: ", Style::default().fg(Color::Cyan)),
-                        Span::raw(&v.name),
-                        Span::raw("    "),
-                        Span::styled("状态: ", Style::default().fg(Color::Cyan)),
-                        Span::styled(mounted_str, Style::default().fg(mounted_color)),
-                    ]),
-                    Line::from(vec![
-                        Span::styled("挂载点: ", Style::default().fg(Color::Cyan)),
-                        Span::raw(&v.mount_point),
-                    ]),
-                ])
-            }
-            None => Text::from("（无卷）"),
-        };
-        let para = Paragraph::new(detail_text)
-            .block(Block::default().borders(Borders::ALL).title(" 详情 "));
-        f.render_widget(para, right_chunks[0]);
-
-        let dv_lines: Vec<Line> = dv.lines.iter().map(|s| Line::from(s.as_str())).collect();
-        let para = Paragraph::new(dv_lines)
-            .block(Block::default().borders(Borders::ALL).title(dv.title.clone()))
-            .scroll((dv.scroll, 0));
-        f.render_widget(para, right_chunks[1]);
+    if app.page == Page::Create {
+        app.pending_list_state = list_state;
     } else {
-        let detail = match app.selected_vault() {
+        app.vault_list_state = list_state;
+    }
+}
+
+fn render_detail(f: &mut Frame, app: &mut App, area: Rect) {
+    let lines: Vec<Line> = match app.page {
+        Page::Mount | Page::Remove => match app.selected_vault() {
             Some(v) => {
                 let mounted_str = if v.mounted { "🔓 已挂载" } else { "🔒 未挂载" };
                 let mounted_color = if v.mounted { Color::Green } else { Color::Red };
@@ -1451,179 +1912,201 @@ fn render_mount_page(f: &mut Frame, app: &mut App, area: Rect) {
                 };
                 vec![
                     Line::from(vec![
-                        Span::styled("ID:       ", Style::default().fg(Color::Cyan)),
+                        Span::styled("ID:        ", Style::default().fg(Color::Cyan)),
                         Span::raw(v.id.to_string()),
                     ]),
                     Line::from(vec![
-                        Span::styled("名称:     ", Style::default().fg(Color::Cyan)),
-                        Span::raw(&v.name),
+                        Span::styled("名称:      ", Style::default().fg(Color::Cyan)),
+                        Span::raw(v.name.clone()),
                     ]),
                     Line::from(vec![
-                        Span::styled("加密路径: ", Style::default().fg(Color::Cyan)),
-                        Span::raw(&v.path),
+                        Span::styled("加密路径:  ", Style::default().fg(Color::Cyan)),
+                        Span::raw(v.path.clone()),
                     ]),
                     Line::from(vec![
-                        Span::styled("挂载点:   ", Style::default().fg(Color::Cyan)),
-                        Span::raw(&v.mount_point),
+                        Span::styled("挂载点:    ", Style::default().fg(Color::Cyan)),
+                        Span::raw(v.mount_point.clone()),
                     ]),
                     Line::from(vec![
-                        Span::styled("状态:     ", Style::default().fg(Color::Cyan)),
+                        Span::styled("状态:      ", Style::default().fg(Color::Cyan)),
                         Span::styled(mounted_str, Style::default().fg(mounted_color)),
                     ]),
                     Line::from(vec![
-                        Span::styled("保护:     ", Style::default().fg(Color::Cyan)),
+                        Span::styled("保护:      ", Style::default().fg(Color::Cyan)),
                         Span::raw(lock_str),
                     ]),
-                    Line::from(""),
-                    Line::from(Span::styled(
-                        "按 l 列表  t 树状  查看挂载点目录内容",
-                        Style::default().fg(Color::DarkGray),
-                    )),
                 ]
             }
-            None => vec![
-                Line::from(Span::styled("（无卷）", Style::default().fg(Color::Gray))),
-                Line::from(""),
-                Line::from(Span::styled(
-                    "按 e 编辑配置添加卷",
-                    Style::default().fg(Color::DarkGray),
-                )),
-            ],
-        };
-        let para = Paragraph::new(detail)
-            .block(Block::default().borders(Borders::ALL).title(" 详情 "))
-            .wrap(Wrap { trim: false });
-        f.render_widget(para, chunks[1]);
-    }
-}
-
-fn render_create_page(f: &mut Frame, app: &mut App, area: Rect) {
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
-        .split(area);
-
-    let mode = if app.create_mode == CreateMode::Create {
-        "创建"
-    } else {
-        "删除"
-    };
-    let items: Vec<ListItem> = if app.create_mode == CreateMode::Create {
-        if app.pending.is_empty() {
-            vec![ListItem::new(Span::styled(
-                "（无待处理目录）",
-                Style::default().fg(Color::Gray),
-            ))]
-        } else {
-            app.pending
-                .iter()
-                .map(|p| ListItem::new(Line::from(vec![Span::raw("○ "), Span::raw(p)])))
-                .collect()
-        }
-    } else {
-        if app.vaults.is_empty() {
-            vec![ListItem::new(Span::styled(
+            None => vec![Line::from(Span::styled(
                 "（无卷）",
                 Style::default().fg(Color::Gray),
-            ))]
-        } else {
-            app.vaults
-                .iter()
-                .map(|v| {
-                    let icon = if v.mounted { "●" } else { "○" };
-                    let color = if v.mounted { Color::Green } else { Color::Gray };
-                    ListItem::new(Line::from(vec![
-                        Span::styled(format!("{} ", icon), Style::default().fg(color)),
-                        Span::raw(&v.name),
-                    ]))
-                })
-                .collect()
+            ))],
+        },
+        Page::Create => {
+            let idx = app.pending_list_state.selected();
+            match idx.and_then(|i| app.pending.get(i).cloned()) {
+                Some(source) => {
+                    let name = std::path::Path::new(&source)
+                        .file_name()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "vault".to_string());
+                    let cipher = format!(
+                        "{}/.cipher.d/{}",
+                        std::path::Path::new(&source)
+                            .parent()
+                            .map(|p| p.to_string_lossy().to_string())
+                            .unwrap_or_else(|| ".".to_string()),
+                        name
+                    );
+                    let tmp_mount = format!("{}.mount_tmp", source);
+
+                    vec![
+                        Line::from(vec![
+                            Span::styled("任务名称:  ", Style::default().fg(Color::Cyan)),
+                            Span::raw(name.clone()),
+                        ]),
+                        Line::from(vec![
+                            Span::styled("源目录:    ", Style::default().fg(Color::Cyan)),
+                            Span::raw(source.clone()),
+                        ]),
+                        Line::from(vec![
+                            Span::styled("加密目录:  ", Style::default().fg(Color::Cyan)),
+                            Span::raw(cipher.clone()),
+                        ]),
+                        Line::from(vec![
+                            Span::styled("临时挂载:  ", Style::default().fg(Color::Cyan)),
+                            Span::raw(tmp_mount.clone()),
+                        ]),
+                        Line::from(vec![
+                            Span::styled("目标挂载:  ", Style::default().fg(Color::Cyan)),
+                            Span::raw(source.clone()),
+                        ]),
+                        Line::from(vec![
+                            Span::styled("状态:      ", Style::default().fg(Color::Cyan)),
+                            Span::styled("待创建", Style::default().fg(Color::Yellow)),
+                        ]),
+                    ]
+                }
+                None => vec![Line::from(Span::styled(
+                    "（无待处理目录）",
+                    Style::default().fg(Color::Gray),
+                ))],
+            }
         }
     };
 
-    let mut list_state = if app.create_mode == CreateMode::Create {
-        app.pending_state.clone()
-    } else {
-        app.list_state.clone()
-    };
-
-    let title = format!(" {} 加密卷 ", mode);
-    let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title(title))
-        .highlight_style(
-            Style::default()
-                .bg(Color::DarkGray)
-                .add_modifier(Modifier::BOLD),
+    let para = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" 详情 ")
+                .border_style(focus_border(Focus::Detail, app.focus)),
         )
-        .highlight_symbol("> ");
-    f.render_stateful_widget(list, chunks[0], &mut list_state);
-
-    if app.create_mode == CreateMode::Create {
-        app.pending_state = list_state;
-    } else {
-        app.list_state = list_state;
-    }
-
-    if let Some(dv) = &app.dir_view {
-        let right_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(5), Constraint::Min(3)])
-            .split(chunks[1]);
-
-        render_create_hint(f, app, right_chunks[0]);
-
-        let dv_lines: Vec<Line> = dv.lines.iter().map(|s| Line::from(s.as_str())).collect();
-        let para = Paragraph::new(dv_lines)
-            .block(Block::default().borders(Borders::ALL).title(dv.title.clone()))
-            .scroll((dv.scroll, 0));
-        f.render_widget(para, right_chunks[1]);
-    } else {
-        render_create_hint(f, app, chunks[1]);
-    }
+        .wrap(Wrap { trim: true })
+        .scroll((app.detail_scroll.v, app.detail_scroll.h));
+    f.render_widget(para, area);
 }
 
-fn render_create_hint(f: &mut Frame, app: &App, area: Rect) {
-    let mode = if app.create_mode == CreateMode::Create {
-        "创建"
-    } else {
-        "删除"
-    };
-    let mut text = vec![
-        Line::from(Span::styled(
-            format!("当前模式: {} 加密卷", mode),
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-    ];
-
-    if app.create_mode == CreateMode::Create {
-        if app.pending.is_empty() {
-            text.push(Line::from(Span::styled(
-                "待处理目录为空",
-                Style::default().fg(Color::Red),
+fn render_dir(f: &mut Frame, app: &mut App, area: Rect) {
+    let mut lines: Vec<Line> = Vec::new();
+    if !app.dir_view.sections.is_empty() {
+        for (i, section) in app.dir_view.sections.iter().enumerate() {
+            if i > 0 {
+                lines.push(Line::from(""));
+            }
+            lines.push(Line::from(Span::styled(
+                section.title.clone(),
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
             )));
-            text.push(Line::from(""));
-            text.push(Line::from("按 e 编辑配置的 pending 段"));
-        } else {
-            text.push(Line::from("按 Enter/Space 对选中的待处理目录创建加密"));
-        }
-    } else {
-        if app.vaults.is_empty() {
-            text.push(Line::from(Span::styled(
-                "无卷可删除",
-                Style::default().fg(Color::Red),
+            lines.push(Line::from(Span::styled(
+                "─".repeat(area.width.saturating_sub(2) as usize),
+                Style::default().fg(Color::DarkGray),
             )));
-        } else {
-            text.push(Line::from("按 Enter/Space 对选中的加密卷执行删除加密"));
-            text.push(Line::from("按 l / t 查看该卷的目录"));
+            for l in &section.lines {
+                lines.push(Line::from(l.as_str()));
+            }
         }
     }
 
-    let para = Paragraph::new(text)
-        .block(Block::default().borders(Borders::ALL).title(" 提示 "))
-        .wrap(Wrap { trim: false });
+    let title = if app.dir_view.mode.is_empty() {
+        " 目录 ".to_string()
+    } else {
+        format!(" 目录 ({}) ", app.dir_view.mode)
+    };
+
+    let para = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .border_style(focus_border(Focus::Dir, app.focus)),
+        )
+        .wrap(Wrap { trim: false })
+        .scroll((app.dir_scroll.v, app.dir_scroll.h));
+    f.render_widget(para, area);
+}
+
+fn render_output(f: &mut Frame, app: &App, area: Rect) {
+    let lines: Vec<Line> = app.output.iter().map(|s| Line::from(s.as_str())).collect();
+    let para = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" 输出 ")
+                .border_style(focus_border(Focus::Output, app.focus)),
+        )
+        .style(Style::default().fg(Color::White).bg(Color::Black))
+        .wrap(Wrap { trim: false })
+        .scroll((app.output_scroll.v, app.output_scroll.h));
+    f.render_widget(para, area);
+}
+
+fn render_status(f: &mut Frame, app: &App, area: Rect) {
+    let global_line = Line::from(vec![
+        Span::styled("全局: ", Style::default().fg(Color::Yellow)),
+        Span::raw("换页[Tab] 焦点[Alt+1/2/3/4] 设置[s] 历史[h] 编辑[e] 刷新[r] 帮助[?] 退出[q]"),
+    ]);
+
+    let page_hint = match app.page {
+        Page::Mount => "页面: [1] 挂载/卸载[m/Enter] 卸载[u] 目录[l] 树状[t] 打开[o]",
+        Page::Create => "页面: [2] 创建向导[Enter] 目录[l] 树状[t] 添加[a]",
+        Page::Remove => "页面: [3] 删除向导[Enter] 目录[l] 树状[t]",
+    };
+    let page_line = Line::from(Span::raw(page_hint));
+
+    let focus_str = match app.focus {
+        Focus::List => "列表",
+        Focus::Detail => "详情",
+        Focus::Dir => "目录",
+        Focus::Output => "输出",
+    };
+    let area_hint = match app.focus {
+        Focus::List => "移动[j/k/↑/↓] 选中[Space]".to_string(),
+        Focus::Detail => "滚动[↑↓←→] 翻页[PgUp/PgDn] 首尾[g/G]".to_string(),
+        Focus::Dir => "滚动[↑↓←→] 翻页[PgUp/PgDn] 首尾[g/G] 清空[c] 刷新[l/t]".to_string(),
+        Focus::Output => "滚动[↑↓←→] 翻页[PgUp/PgDn] 首尾[g/G] 清空[c]".to_string(),
+    };
+    let task_info = if let Some(t) = &app.task {
+        match t.status {
+            TaskStatus::Running => format!("运行中: {}", t.description),
+            TaskStatus::Done => format!("完成: {}", t.description),
+            TaskStatus::Failed(_) => format!("失败: {}", t.description),
+        }
+    } else {
+        "无".to_string()
+    };
+    let region_line = Line::from(vec![
+        Span::styled(format!("区域: {} │ ", focus_str), Style::default().fg(Color::Yellow)),
+        Span::raw(area_hint),
+        Span::raw("    "),
+        Span::styled("状态: ", Style::default().fg(Color::Cyan)),
+        Span::raw(&app.status),
+        Span::styled(" 任务: ", Style::default().fg(Color::Cyan)),
+        Span::raw(task_info),
+    ]);
+
+    let para = Paragraph::new(vec![global_line, page_line, region_line])
+        .style(Style::default().fg(Color::White).bg(Color::DarkGray));
     f.render_widget(para, area);
 }
 
@@ -1640,9 +2123,7 @@ fn render_wizard(f: &mut Frame, app: &App, area: Rect) {
     };
     lines.push(Line::from(Span::styled(
         title,
-        Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD),
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(""));
 
@@ -1665,30 +2146,13 @@ fn render_wizard(f: &mut Frame, app: &App, area: Rect) {
                         Span::raw(&wizard.tmp_mount),
                     ]));
                     lines.push(Line::from(""));
-                    lines.push(Line::from(Span::styled(
-                        "（路径如需修改，请按 Esc 退出后编辑配置文件）",
-                        Style::default().fg(Color::Gray),
-                    )));
-                    lines.push(Line::from(""));
-                    lines.push(render_option(
-                        0,
-                        wizard.selected,
-                        wizard.dry_run,
-                        false,
-                        "预览模式（不实际修改）",
-                    ));
+                    lines.push(render_option(0, wizard.selected, wizard.dry_run, false, "预览模式"));
                     let (keep_text, keep_locked) = if wizard.keep_source_locked {
                         ("保留源文件 · 配置已锁定", true)
                     } else {
                         ("保留源文件", false)
                     };
-                    lines.push(render_option(
-                        1,
-                        wizard.selected,
-                        wizard.keep_source,
-                        keep_locked,
-                        keep_text,
-                    ));
+                    lines.push(render_option(1, wizard.selected, wizard.keep_source, keep_locked, keep_text));
                 }
                 WizardDirection::Remove => {
                     lines.push(Line::from(vec![
@@ -1704,49 +2168,38 @@ fn render_wizard(f: &mut Frame, app: &App, area: Rect) {
                         Span::raw(&wizard.source),
                     ]));
                     lines.push(Line::from(""));
-                    lines.push(render_option(
-                        0,
-                        wizard.selected,
-                        wizard.dry_run,
-                        false,
-                        "预览模式",
-                    ));
+                    lines.push(render_option(0, wizard.selected, wizard.dry_run, false, "预览模式"));
                     let (restore_text, restore_locked) = if wizard.restore_locked {
                         ("还原明文 · 配置已锁定", true)
                     } else {
                         ("还原明文", false)
                     };
-                    lines.push(render_option(
-                        1,
-                        wizard.selected,
-                        wizard.restore,
-                        restore_locked,
-                        restore_text,
-                    ));
+                    lines.push(render_option(1, wizard.selected, wizard.restore, restore_locked, restore_text));
                     let (del_text, del_locked) = if wizard.delete_cipher_locked {
                         ("直接删除加密后端 · 配置未授权", true)
                     } else {
                         ("直接删除加密后端", false)
                     };
-                    lines.push(render_option(
-                        2,
-                        wizard.selected,
-                        wizard.delete_cipher,
-                        del_locked,
-                        del_text,
-                    ));
+                    lines.push(render_option(2, wizard.selected, wizard.delete_cipher, del_locked, del_text));
                 }
             }
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "切换选项[Space]  移动[j/k]  继续[Enter]  取消[Esc]",
+                "切换[Space] 移动[j/k] 继续[Enter] 取消[Esc]",
                 Style::default().fg(Color::Gray),
             )));
         }
         WizardStep::EnterPassword => {
             lines.push(Line::from("步骤 2/3: 输入密码"));
             lines.push(Line::from(""));
-            if !wizard.confirming {
+
+            if wizard.direction == WizardDirection::Remove {
+                lines.push(Line::from("请输入密码："));
+                lines.push(Line::from(Span::styled(
+                    "*".repeat(wizard.password.chars().count()),
+                    Style::default().fg(Color::White),
+                )));
+            } else if !wizard.confirming {
                 lines.push(Line::from("请输入密码："));
                 lines.push(Line::from(Span::styled(
                     "*".repeat(wizard.password.chars().count()),
@@ -1772,18 +2225,42 @@ fn render_wizard(f: &mut Frame, app: &App, area: Rect) {
                 )));
             }
             lines.push(Line::from(Span::styled(
-                "继续[Enter]  删除[Backspace/Delete]  取消[Esc]",
+                "继续[Enter] 删除[Backspace/Delete] 取消[Esc]",
+                Style::default().fg(Color::Gray),
+            )));
+        }
+        WizardStep::ConfirmDelete => {
+            lines.push(Line::from("步骤 3/3: 确认删除"));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "⚠️  此操作将删除加密卷并还原明文",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(format!("卷名: {}", wizard.vault_name)));
+            lines.push(Line::from(""));
+            lines.push(Line::from("请输入 DELETE 以确认："));
+            lines.push(Line::from(Span::styled(
+                wizard.delete_confirm_text.clone(),
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(""));
+            if let Some(err) = &wizard.error {
+                lines.push(Line::from(Span::styled(
+                    format!("❌ {}", err),
+                    Style::default().fg(Color::Red),
+                )));
+            }
+            lines.push(Line::from(Span::styled(
+                "确认[Enter] 取消[Esc]",
                 Style::default().fg(Color::Gray),
             )));
         }
         WizardStep::Running => {
-            lines.push(Line::from("步骤 3/3: 执行中..."));
+            lines.push(Line::from("执行中..."));
             lines.push(Line::from(""));
             if !wizard.checks.is_empty() {
-                lines.push(Line::from(Span::styled(
-                    "容量检查：",
-                    Style::default().fg(Color::Cyan),
-                )));
+                lines.push(Line::from(Span::styled("容量检查：", Style::default().fg(Color::Cyan))));
                 for k in &["src_size", "target_free", "required"] {
                     if let Some(v) = wizard.checks.get(*k) {
                         lines.push(Line::from(format!("  {}: {}", k, v)));
@@ -1795,28 +2272,22 @@ fn render_wizard(f: &mut Frame, app: &App, area: Rect) {
                 lines.push(Line::from(format!("迁移进度: {}%", pct)));
                 let bar_width = 40usize.min(area.width.saturating_sub(20) as usize);
                 let filled = (bar_width * pct as usize) / 100;
-                let bar: String =
-                    "▓".repeat(filled) + &"░".repeat(bar_width.saturating_sub(filled));
-                lines.push(Line::from(Span::styled(
-                    bar,
-                    Style::default().fg(Color::Green),
-                )));
+                let bar: String = "▓".repeat(filled) + &"░".repeat(bar_width.saturating_sub(filled));
+                lines.push(Line::from(Span::styled(bar, Style::default().fg(Color::Green))));
                 if total > 0 {
                     lines.push(Line::from(format!("{} / {} 字节", done, total)));
                 }
             }
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "请等待...",
+                "中断[Ctrl+C]",
                 Style::default().fg(Color::Gray),
             )));
         }
         WizardStep::Done => {
             lines.push(Line::from(Span::styled(
                 "✅ 完成",
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from("按任意键返回"));
@@ -1835,71 +2306,56 @@ fn render_wizard(f: &mut Frame, app: &App, area: Rect) {
 
     let para = Paragraph::new(lines)
         .block(Block::default().borders(Borders::ALL).title(" 向导 "))
-        .wrap(Wrap { trim: false });
+        .wrap(Wrap { trim: true });
     f.render_widget(para, area);
 }
 
-fn render_option(
-    idx: usize,
-    selected: usize,
-    value: bool,
-    locked: bool,
-    label: &str,
-) -> Line<'static> {
+fn render_option(idx: usize, selected: usize, value: bool, locked: bool, label: &str) -> Line<'static> {
     let marker = if value { "[x]" } else { "[ ]" };
     let prefix = if idx == selected { "> " } else { "  " };
     let style = if locked {
         Style::default().fg(Color::DarkGray)
     } else if idx == selected {
-        Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD)
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
     } else {
         Style::default()
     };
     Line::from(Span::styled(format!("{}{} {}", prefix, marker, label), style))
 }
 
-fn render_output(f: &mut Frame, app: &App, area: Rect) {
-    let lines: Vec<Line> = app.output.iter().map(|s| Line::from(s.as_str())).collect();
-    let para = Paragraph::new(lines)
-        .block(Block::default().borders(Borders::ALL).title(" 输出 "))
-        .style(Style::default().fg(Color::White).bg(Color::Black))
-        .wrap(Wrap { trim: false });
-    f.render_widget(para, area);
-}
-
-fn render_status(f: &mut Frame, app: &App, area: Rect) {
-    let page_hint = match app.page {
-        Page::Mount => " 移动[j/k] 挂载[m/Space] 卸载[u] 列表[l] 树状[t]",
-        Page::Create => {
-            if app.create_mode == CreateMode::Create {
-                " 移动[j/k] 创建模式[c] 删除模式[d] 进入[Enter/Space]"
-            } else {
-                " 移动[j/k] 创建模式[c] 删除模式[d] 进入[Enter/Space] 列表[l] 树状[t]"
-            }
-        }
+fn render_confirm_umount(f: &mut Frame, app: &App, idx: usize, area: Rect) {
+    let (name, mp) = match app.vaults.get(idx) {
+        Some(v) => (v.name.clone(), v.mount_point.clone()),
+        None => ("未知".to_string(), "-".to_string()),
     };
-    let global_hint = " 设置[s] 历史[h] 编辑[e] 帮助[?] 退出[q] 切页[Tab]";
+    let popup = centered_rect(60, 30, area);
+    f.render_widget(Clear, popup);
 
-    let task_info = if let Some(t) = &app.task {
-        format!("  [运行: {}]", t.description)
-    } else {
-        String::new()
-    };
-
-    let line1 = Line::from(vec![
-        Span::styled(page_hint, Style::default().fg(Color::White)),
-        Span::styled(global_hint, Style::default().fg(Color::Gray)),
-    ]);
-    let line2 = Line::from(vec![
-        Span::styled(" 状态: ", Style::default().fg(Color::Cyan)),
-        Span::raw(&app.status),
-        Span::styled(task_info, Style::default().fg(Color::Yellow)),
-    ]);
-    let para = Paragraph::new(vec![line1, line2])
-        .style(Style::default().fg(Color::White).bg(Color::DarkGray));
-    f.render_widget(para, area);
+    let text = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "确认卸载",
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(format!("卷:    {}", name)),
+        Line::from(format!("挂载点: {}", mp)),
+        Line::from(""),
+        Line::from(Span::styled(
+            "确认[y] 取消[n/Esc]",
+            Style::default().fg(Color::Gray),
+        )),
+    ];
+    let para = Paragraph::new(text)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" ⚡ 操作 ")
+                .style(Style::default().bg(Color::Rgb(0, 0, 100))),
+        )
+        .alignment(ratatui::layout::Alignment::Center)
+        .wrap(Wrap { trim: true });
+    f.render_widget(para, popup);
 }
 
 fn render_help_overlay(f: &mut Frame, area: Rect) {
@@ -1907,136 +2363,68 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
     f.render_widget(Clear, popup);
 
     let text = vec![
-        Line::from(Span::styled(
-            "帮助",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )),
+        Line::from(Span::styled("帮助", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
         Line::from(""),
-        Line::from(Span::styled(
-            "全局（任何页面都可用）:",
-            Style::default().fg(Color::Cyan),
-        )),
-        Line::from("  切页[Tab]       在 [1]挂载/卸载 与 [2]创建/删除 之间切换"),
-        Line::from("  跳页[1/2]       直接跳到指定页面"),
-        Line::from("  设置[s]         打开设置浮层"),
-        Line::from("  历史[h]         打开历史浮层"),
-        Line::from("  编辑[e]         用外部编辑器打开配置文件"),
-        Line::from("  刷新[r]         重新加载卷列表与待处理目录"),
-        Line::from("  帮助[?]         打开/关闭本帮助"),
-        Line::from("  退出[q]         退出程序"),
+        Line::from(Span::styled("全局:", Style::default().fg(Color::Cyan))),
+        Line::from("  换页[Tab] / [1/2/3]"),
+        Line::from("  焦点[Alt+1/2/3/4]"),
+        Line::from("  设置[s] 历史[h] 编辑[e] 刷新[r] 帮助[?] 退出[q]"),
+        Line::from("  中断任务[Ctrl+C]"),
+        Line::from("  强制退出[Ctrl+D × 3 (2 秒内)]"),
         Line::from(""),
-        Line::from(Span::styled(
-            "页面 1（挂载/卸载）:",
-            Style::default().fg(Color::Cyan),
-        )),
-        Line::from("  移动[j/k]       上下移动选择"),
-        Line::from("  挂载[m/Space]   挂载选中的卷（弹出密码输入）"),
-        Line::from("  卸载[u]         卸载选中的卷"),
-        Line::from("  列表[l]         列出挂载点目录（ls -la）"),
-        Line::from("  树状[t]         树状显示挂载点目录（tree）"),
+        Line::from(Span::styled("TAB1 挂载/卸载:", Style::default().fg(Color::Cyan))),
+        Line::from("  移动[j/k/↑/↓] 选中[Space]"),
+        Line::from("  挂载/卸载[m/Enter] 卸载[u]"),
+        Line::from("  目录[l] 树状[t] 打开[o]"),
         Line::from(""),
-        Line::from(Span::styled(
-            "页面 2（创建/删除）:",
-            Style::default().fg(Color::Cyan),
-        )),
-        Line::from("  移动[j/k]       上下移动选择"),
-        Line::from("  创建模式[c]     切换到创建模式（左侧显示 pending 目录）"),
-        Line::from("  删除模式[d]     切换到删除模式（左侧显示加密卷）"),
-        Line::from("  进入[Enter/Space] 用当前模式打开向导"),
-        Line::from("  列表[l]         列出当前卷目录（仅删除模式）"),
-        Line::from("  树状[t]         树状显示当前卷目录（仅删除模式）"),
+        Line::from(Span::styled("TAB2 创建加密:", Style::default().fg(Color::Cyan))),
+        Line::from("  移动[j/k/↑/↓] 选中[Space]"),
+        Line::from("  进入创建向导[Enter]"),
+        Line::from("  目录[l] 树状[t]"),
         Line::from(""),
-        Line::from(Span::styled(
-            "目录视图滚动:",
-            Style::default().fg(Color::Cyan),
-        )),
-        Line::from("  [PgDn/PgUp]     上下翻页"),
-        Line::from("  [g/G]           跳到首/尾"),
+        Line::from(Span::styled("TAB3 删除加密:", Style::default().fg(Color::Cyan))),
+        Line::from("  移动[j/k/↑/↓] 选中[Space]"),
+        Line::from("  进入删除向导[Enter]"),
+        Line::from("  目录[l] 树状[t]"),
         Line::from(""),
-        Line::from(Span::styled("向导:", Style::default().fg(Color::Cyan))),
-        Line::from("  切换选项[Space] 切换选项（dry-run / 保留源文件 等）"),
-        Line::from("  移动[j/k]       在选项间移动"),
-        Line::from("  继续[Enter]     推进向导"),
-        Line::from("  取消[Esc]       取消向导"),
-        Line::from("  删除[Backspace/Delete/Ctrl+H] 删除密码字符"),
+        Line::from(Span::styled("焦点 B/C/D:", Style::default().fg(Color::Cyan))),
+        Line::from("  滚动[↑/↓/←/→] 翻页[PgUp/PgDn] 首尾[g/G]"),
+        Line::from("  清空[c] (目录/输出)"),
+        Line::from("  刷新[l/t] (仅目录焦点)"),
         Line::from(""),
-        Line::from(Span::styled(
-            "按 Esc / ? 关闭",
-            Style::default().fg(Color::Gray),
-        )),
+        Line::from(Span::styled("按 Esc / ? 关闭", Style::default().fg(Color::Gray))),
     ];
-
     let para = Paragraph::new(text)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .style(Style::default().bg(Color::Rgb(0, 0, 100))),
-        )
-        .wrap(Wrap { trim: false });
+        .block(Block::default().borders(Borders::ALL).style(Style::default().bg(Color::Rgb(0, 0, 100))))
+        .wrap(Wrap { trim: true });
     f.render_widget(para, popup);
 }
 
-fn render_settings_overlay(
-    f: &mut Frame,
-    tab: SettingsTab,
-    scope_index: usize,
-    app: &App,
-    area: Rect,
-) {
+fn render_settings_overlay(f: &mut Frame, tab: SettingsTab, scope_index: usize, app: &App, area: Rect) {
     let popup = centered_rect(80, 75, area);
     f.render_widget(Clear, popup);
 
-    let scope_name = app
-        .scope_names
-        .get(scope_index)
-        .map(|s| s.as_str())
-        .unwrap_or("全局");
+    let scope_name = app.scope_names.get(scope_index).map(|s| s.as_str()).unwrap_or("全局");
     let tab_str = match tab {
         SettingsTab::Gocryptfs => "[g]gocryptfs",
         SettingsTab::Rsync => "[r]rsync",
         SettingsTab::Filters => "[f]filters",
         SettingsTab::Perm => "[p]权限",
     };
-
     let mut lines = vec![
         Line::from(vec![
             Span::styled("作用域: ", Style::default().fg(Color::Cyan)),
-            Span::styled(
-                scope_name,
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(format!(
-                "   ({} / {})",
-                scope_index + 1,
-                app.scope_names.len().max(1)
-            )),
+            Span::styled(scope_name, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw(format!("   ({} / {})", scope_index + 1, app.scope_names.len().max(1))),
         ]),
-        Line::from(Span::styled(
-            format!("分类: {}", tab_str),
-            Style::default().fg(Color::Cyan),
-        )),
+        Line::from(Span::styled(format!("分类: {}", tab_str), Style::default().fg(Color::Cyan))),
         Line::from(""),
     ];
 
     let content = std::fs::read_to_string(&app.config).unwrap_or_default();
     match tab {
         SettingsTab::Gocryptfs => {
-            for k in &[
-                "allow_other",
-                "allow_root",
-                "read_only",
-                "nosuid",
-                "nodev",
-                "noexec",
-                "nonempty",
-                "kernel_cache",
-                "one_file_system",
-                "reverse",
-            ] {
+            for k in &["allow_other", "allow_root", "read_only", "nosuid", "nodev", "noexec", "nonempty", "kernel_cache", "one_file_system", "reverse"] {
                 let display = match extract_yaml_value(&content, k).as_deref() {
                     Some("true") => "[x]",
                     Some("false") => "[ ]",
@@ -2046,17 +2434,7 @@ fn render_settings_overlay(
             }
         }
         SettingsTab::Rsync => {
-            for k in &[
-                "archive",
-                "compress",
-                "verbose",
-                "human_readable",
-                "progress",
-                "partial",
-                "delete",
-                "update",
-                "checksum",
-            ] {
+            for k in &["archive", "compress", "verbose", "human_readable", "progress", "partial", "delete", "update", "checksum"] {
                 let display = match extract_yaml_value(&content, k).as_deref() {
                     Some("true") => "[x]",
                     Some("false") => "[ ]",
@@ -2093,18 +2471,13 @@ fn render_settings_overlay(
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "切换作用域[Tab]  分类[g/r/f/p]  编辑[e]  关闭[Esc]",
+        "切换作用域[Tab] 分类[g/r/f/p] 编辑[e] 关闭[Esc]",
         Style::default().fg(Color::Gray),
     )));
 
     let para = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" ⚙ 设置 ")
-                .style(Style::default().bg(Color::Rgb(0, 0, 100))),
-        )
-        .wrap(Wrap { trim: false });
+        .block(Block::default().borders(Borders::ALL).title(" ⚙ 设置 ").style(Style::default().bg(Color::Rgb(0, 0, 100))))
+        .wrap(Wrap { trim: true });
     f.render_widget(para, popup);
 }
 
@@ -2125,16 +2498,9 @@ fn extract_yaml_value(content: &str, key: &str) -> Option<String> {
 fn render_history_overlay(f: &mut Frame, entries: &[HistoryEntry], selected: usize, area: Rect) {
     let popup = centered_rect(80, 75, area);
     f.render_widget(Clear, popup);
-
     let mut lines: Vec<Line> = Vec::new();
-    lines.push(Line::from(Span::styled(
-        "📜 历史记录",
-        Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD),
-    )));
+    lines.push(Line::from(Span::styled("📜 历史记录", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
     lines.push(Line::from(""));
-
     if entries.is_empty() {
         lines.push(Line::from("（暂无历史）"));
     } else {
@@ -2146,57 +2512,33 @@ fn render_history_overlay(f: &mut Frame, entries: &[HistoryEntry], selected: usi
             };
             let prefix = if i == selected { "> " } else { "  " };
             let ts = if e.ts.len() >= 19 { &e.ts[11..19] } else { &e.ts };
-            let detail = if e.detail.is_empty() {
-                String::new()
-            } else {
-                format!(" ({})", e.detail)
-            };
-            lines.push(Line::from(format!(
-                "{}{} {}  {} {}  {}{}",
-                prefix, icon, ts, e.action, e.name, e.status, detail
-            )));
+            let detail = if e.detail.is_empty() { String::new() } else { format!(" ({})", e.detail) };
+            lines.push(Line::from(format!("{}{} {}  {} {}  {}{}", prefix, icon, ts, e.action, e.name, e.status, detail)));
         }
     }
-
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "移动[j/k]  关闭[Esc]",
-        Style::default().fg(Color::Gray),
-    )));
+    lines.push(Line::from(Span::styled("移动[j/k] 关闭[Esc]", Style::default().fg(Color::Gray))));
 
     let para = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .style(Style::default().bg(Color::Rgb(0, 0, 100))),
-        )
-        .wrap(Wrap { trim: false });
+        .block(Block::default().borders(Borders::ALL).style(Style::default().bg(Color::Rgb(0, 0, 100))))
+        .wrap(Wrap { trim: true });
     f.render_widget(para, popup);
 }
 
 fn render_message_overlay(f: &mut Frame, msg: &str, area: Rect) {
     let popup = centered_rect(70, 40, area);
     f.render_widget(Clear, popup);
-
     let mut lines: Vec<Line> = vec![Line::from("")];
     for line in msg.lines() {
         lines.push(Line::from(line.to_string()));
     }
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "按任意键关闭",
-        Style::default().fg(Color::Gray),
-    )));
+    lines.push(Line::from(Span::styled("按任意键关闭", Style::default().fg(Color::Gray))));
 
     let para = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" 提示 ")
-                .style(Style::default().bg(Color::Rgb(0, 0, 100))),
-        )
+        .block(Block::default().borders(Borders::ALL).title(" 提示 ").style(Style::default().bg(Color::Rgb(0, 0, 100))))
         .alignment(ratatui::layout::Alignment::Center)
-        .wrap(Wrap { trim: false });
+        .wrap(Wrap { trim: true });
     f.render_widget(para, popup);
 }
 
@@ -2204,81 +2546,48 @@ fn load_history() -> Vec<HistoryEntry> {
     let path = dirs::data_local_dir()
         .map(|d| d.join(APP_NAME).join("history.jsonl"))
         .unwrap_or_default();
-
     let content = match std::fs::read_to_string(&path) {
         Ok(c) => c,
         Err(_) => return Vec::new(),
     };
-    content
-        .lines()
-        .filter_map(|line| serde_json::from_str::<HistoryEntry>(line).ok())
-        .collect()
+    content.lines().filter_map(|line| serde_json::from_str::<HistoryEntry>(line).ok()).collect()
 }
 
 fn render_password_input(f: &mut Frame, pw: &PasswordInput, area: Rect) {
     let popup = centered_rect(50, 30, area);
     f.render_widget(Clear, popup);
-
     let mut text = vec![
         Line::from(Span::styled(
             format!("挂载 {}", pw.vault_name),
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from("请输入密码："),
     ];
-    text.push(Line::from(Span::styled(
-        "*".repeat(pw.buffer.chars().count()),
-        Style::default().fg(Color::White),
-    )));
+    text.push(Line::from(Span::styled("*".repeat(pw.buffer.chars().count()), Style::default().fg(Color::White))));
     if let Some(err) = &pw.error {
         text.push(Line::from(""));
-        text.push(Line::from(Span::styled(
-            format!("❌ {}", err),
-            Style::default().fg(Color::Red),
-        )));
+        text.push(Line::from(Span::styled(format!("❌ {}", err), Style::default().fg(Color::Red))));
     }
     text.push(Line::from(""));
-    text.push(Line::from(Span::styled(
-        "确认[Enter]  删除[Backspace/Delete]  取消[Esc]",
-        Style::default().fg(Color::Gray),
-    )));
+    text.push(Line::from(Span::styled("确认[Enter] 删除[Backspace/Delete] 取消[Esc]", Style::default().fg(Color::Gray))));
 
     let para = Paragraph::new(text)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .style(Style::default().bg(Color::Rgb(0, 0, 100))),
-        )
-        .wrap(Wrap { trim: false });
+        .block(Block::default().borders(Borders::ALL).style(Style::default().bg(Color::Rgb(0, 0, 100))))
+        .wrap(Wrap { trim: true });
     f.render_widget(para, popup);
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     let mut width = (r.width as u32 * percent_x as u32 / 100) as u16;
     let mut height = (r.height as u32 * percent_y as u32 / 100) as u16;
-    if width < 30 {
-        width = 30;
-    }
-    if height < 8 {
-        height = 8;
-    }
-    if width > r.width {
-        width = r.width;
-    }
-    if height > r.height {
-        height = r.height;
-    }
+    if width < 30 { width = 30; }
+    if height < 8 { height = 8; }
+    if width > r.width { width = r.width; }
+    if height > r.height { height = r.height; }
     let x = r.x + (r.width.saturating_sub(width)) / 2;
     let y = r.y + (r.height.saturating_sub(height)) / 2;
-    Rect {
-        x,
-        y,
-        width,
-        height,
-    }
+    Rect { x, y, width, height }
 }
 
 // ============================================================
@@ -2310,7 +2619,15 @@ fn run_app<B: Backend>(
                 if key.kind != KeyEventKind::Press {
                     continue;
                 }
+                let is_ctrl_c = key.modifiers.contains(KeyModifiers::CONTROL)
+                    && key.code == KeyCode::Char('c');
+
                 handle_key(app, key.code, key.modifiers);
+
+                if is_ctrl_c {
+                    std::thread::sleep(Duration::from_millis(100));
+                    terminal.clear()?;
+                }
             }
         }
     }
@@ -2330,22 +2647,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(RunResult::Quit) => break Ok(()),
             Ok(RunResult::EditConfig) => {
                 disable_raw_mode()?;
-                execute!(
-                    terminal.backend_mut(),
-                    LeaveAlternateScreen,
-                    DisableMouseCapture
-                )?;
+                execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
                 terminal.show_cursor()?;
-
                 let editor = std::env::var("EDITOR").unwrap_or_else(|_| "nano".to_string());
                 let _ = Command::new(&editor).arg(&app.config).status();
-
                 enable_raw_mode()?;
                 let mut stdout = std::io::stdout();
                 execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
                 let backend = CrosstermBackend::new(stdout);
                 terminal = Terminal::new(backend)?;
-
                 app.editor_request = false;
                 app.reload_vaults();
                 app.reload_pending();
@@ -2356,11 +2666,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
     terminal.show_cursor()?;
     final_result
 }
