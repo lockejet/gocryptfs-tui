@@ -1,0 +1,49 @@
+# ===== Rust 编译产物 =====
+/target/
+**/*.rs.bk
+*.pdb
+
+# ===== 敏感配置 =====
+config.yaml
+config.yml
+*.local.yaml
+*.local.yml
+test-config.yaml
+!examples/*.example
+
+# ===== 密码 / 密钥 =====
+*.pass
+*.key
+*.pem
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+known_hosts
+
+# ===== 日志 / 历史 =====
+*.log
+*.jsonl
+history.jsonl
+
+# ===== 测试环境 =====
+/test-env/
+/tmp-test/
+*.mount_tmp/
+*.restore_tmp/
+
+# ===== IDE / OS =====
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ===== 本地备份 =====
+*.bak
+*~
+config.yaml.backup
+
+# ===== 其他 =====
+/bakup/

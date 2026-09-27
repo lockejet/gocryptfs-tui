@@ -1,0 +1,89 @@
+# gocryptfs-tui 配置文件示例
+# 复制到 ~/.config/gocryptfs-tui/config.yaml 并按需修改
+#
+# 注意：本文件中的路径均为示例，使用前请替换为你的真实路径
+
+settings:
+  # 权限模式（保留 setgid/setuid/sticky）
+  unlock_mode: "755"
+  lock_mode: "555"
+
+  # gocryptfs 全局挂载选项
+  gocryptfs:
+    allow_other: true
+    allow_root: false
+    read_only: false
+    nosuid: false
+    nodev: false
+    noexec: false
+    kernel_cache: false
+    one_file_system: false
+    reverse: false
+
+  # rsync 全局迁移选项
+  rsync:
+    archive: true
+    compress: true
+    verbose: true
+    human_readable: true
+    progress: true
+    partial: true
+    delete: false
+    update: false
+    checksum: false
+
+  # 过滤器（全局）
+  filters:
+    - kind: exclude
+      pattern: "*.tmp"
+    - kind: exclude
+      pattern: ".git/"
+
+  # 创建加密的策略
+  create:
+    # false=删除源(激进) / true=保留源(保守)
+    keep_source: false
+    cipher_dir_mode: sibling    # sibling / custom
+    cipher_dir_custom: ""
+    tmp_mount_suffix: ".mount_tmp"
+
+  # 删除加密的策略
+  remove:
+    # true=必须还原(保守) / false=允许不还原(激进)
+    restore: true
+    # false=保留后端(保守) / true=允许删除(激进)
+    direct_delete_cipher: false
+    restore_target_mode: in_place   # in_place / sibling / custom
+    restore_target_custom: ""
+
+# ---------- 卷列表 ----------
+# 每个卷的字段：
+#   id           唯一整数
+#   name         卷名（用于命令行）
+#   path         加密后端路径（密文存储）
+#   mount_point  挂载点路径（明文访问）
+#   overrides    可选，覆盖全局设置
+vaults:
+  - id: 1
+    name: my_vault
+    path: /srv/data/.cipher.d/my_vault
+    mount_point: /srv/data/my_vault
+
+  - id: 2
+    name: Work
+    path: /srv/data/.cipher.d/Work
+    mount_point: /srv/data/Work
+
+  - id: 3
+    name: archive_vault
+    path: /srv/data/.cipher.d/archive_vault
+    mount_point: /srv/data/archive_vault
+
+# ---------- 待处理目录（创建加密的预备列表）----------
+pending: []
+# 示例：
+# pending:
+#   - source_dir: /srv/data/photos
+#     overrides:
+#       rsync:
+#         remove_source_files: false

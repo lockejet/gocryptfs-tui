@@ -1,0 +1,82 @@
+#!/bin/bash
+set -euo pipefail
+
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+    DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+LIB_DIR="$SCRIPT_DIR/lib"
+
+# 加载 lib（单文件）
+if [ -f "$LIB_DIR/gocryptfs-lib.sh" ]; then
+    source "$LIB_DIR/gocryptfs-lib.sh"
+else
+    # 兼容旧版：按需 source
+    source "$LIB_DIR/common.sh"
+fi
+
+CONFIG_FILE="${CONFIG_FILE:-$HOME/.config/gocryptfs-tui/config.yaml}"
+JSON_MODE=false
+VERBOSE=false
+DRY_RUN=false
+
+# ============================================================
+# 单遍扫描所有参数，识别全局选项（位置无关）
+# ============================================================
+POSITIONAL=()
+i=1
+while [ $i -le $# ]; do
+    arg="${!i}"
+    case "$arg" in
+        -c|--config)
+            i=$((i+1))
+            if [ $i -gt $# ]; then
+                echo "错误: -c/--config 需要参数" >&2
+                exit 1
+            fi
+            CONFIG_FILE="${!i}"
+            ;;
+        --json)          JSON_MODE=true ;;
+        -v|--verbose)    VERBOSE=true ;;
+        --dry-run)       DRY_RUN=true ;;
+        -h|--help)       show_help; exit 0 ;;
+        --check-deps)    check_deps; exit $? ;;
+        *)
+            POSITIONAL+=("$arg")
+            ;;
+    esac
+    i=$((i+1))
+done
+set -- "${POSITIONAL[@]}"
+
+export CONFIG_FILE JSON_MODE VERBOSE DRY_RUN
+
+if [ $# -eq 0 ]; then
+    show_help
+    exit 1
+fi
+
+COMMAND="$1"; shift
+
+case "$COMMAND" in
+    list)       cmd_list "$@" ;;
+    info)       cmd_info "$@" ;;
+    ls)         cmd_ls "$@" ;;
+    tree)       cmd_tree "$@" ;;
+    mount)      cmd_mount "$@" ;;
+    umount)     cmd_umount "$@" ;;
+    create)     cmd_create "$@" ;;
+    remove)     cmd_remove "$@" ;;
+    config)     echo "$CONFIG_FILE" ;;
+    edit)       ${EDITOR:-nano} "$CONFIG_FILE" ;;
+    check-deps) check_deps ;;
+    help|--help|-h) show_help ;;
+    *)
+        echo "未知命令: $COMMAND" >&2
+        show_help
+        exit 1
+        ;;
+esac

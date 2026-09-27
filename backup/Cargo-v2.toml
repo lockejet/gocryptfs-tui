@@ -1,0 +1,13 @@
+[package]
+name = "gocryptfs-tui"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ratatui = "0.26"
+crossterm = { version = "0.27", features = ["event-stream"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+dirs = "5.0"
+chrono = "0.4.45"
+serde_yaml = "0.9"
