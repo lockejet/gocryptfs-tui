@@ -56,6 +56,18 @@ settings:
     restore_target_mode: in_place   # in_place / sibling / custom
     restore_target_custom: ""
 
+  # 日志与历史（阶段 4 生效）
+  # 记录 CLI 和 TUI 的操作、按键、向导步骤到统一的 JSONL 文件
+  logging:
+    # operation   只记业务操作（mount/umount/create/remove）——推荐
+    # interactive 业务操作 + 用户交互（按键/页面/向导步骤）
+    # debug       全部记录（含内部事件）
+    level: operation
+    # 单个日志文件上限（字节），超出后轮转
+    max_size: 5242880      # 5 MB
+    # 保留的历史文件个数
+    max_files: 3
+
 # ---------- 卷列表 ----------
 # 每个卷的字段：
 #   id           唯一整数
