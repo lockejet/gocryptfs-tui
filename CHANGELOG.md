@@ -1,75 +1,57 @@
-# 更新日志
+# Changelog
 
-本项目遵循 [Keep a Changelog](https://keepachangelog.com/) 和
-[语义化版本](https://semver.org/)。
+本项目遵循 [Semantic Versioning](https://semver.org/)。
 
 ## [Unreleased]
 
-### 计划
+### Build
 
-- 向导支持中止正在运行的 CLI（信号处理）
-- 设置浮层就地编辑（不依赖外部编辑器）
-- 待处理目录交互式添加
-- 历史浮层详情视图
-- 支持 `gocryptfs -reverse` 反向模式
+- **版本注入**：新增 `build.rs`，编译期从 git tag 注入
+  `APP_VERSION` / `APP_COMMIT` / `APP_BUILD_TIME`
+- **构建入口**：新增 `Makefile`，提供 `build` / `check` / `release` /
+  `dist` / `install-local` 等目标
+- **发布流程**：`cargo-release` + `git-cliff` + `cargo-dist` 组合。
+  bump 版本、生成 CHANGELOG、打 tag、CI 多平台构建
+  （gnu/musl × amd64/arm64）、创建 GitHub Release
+- **交叉编译**：新增 `Cross.toml`，本地可用 `cross` 编译 arm64 / musl
 
-## [0.1.0] - 2026-09-27
+### Features
 
-### 新增
+- **CLI 参数**：TUI 新增 `-c/--config`、`-D/--data-dir`、
+  `-h/--help`、`-V/--version`。手写解析，不引入 clap
+- **统一日志**：新增 `src/logger.rs`，TUI 与 CLI 共用
+  `app.log.jsonl`。三个级别 `operation` / `interactive` / `debug`。
+  按 `max_size` 轮转，保留 `max_files` 个历史文件
+- **CLI `log` 子命令**：支持 `--limit` / `--src` / `--action` /
+  `--result` / `--since` / `--follow` / `--json`
+- **TUI 帮助菜单**：帮助浮层加入版本信息、路径、启动参数段。
+  `H` 键导出到 `<data_dir>/HELP.md`
+- **TUI 历史浮层**：读取 `app.log.jsonl`，支持按来源 `s` /
+  结果 `r` / 操作 `a` 循环过滤
+- **旧历史迁移**：首次启动时自动把 `history.jsonl`
+  迁移到 `app.log.jsonl`
 
-#### CLI（`gocryptfs-cli`）
+### Bug Fixes
 
-- `list` / `info` —— 列出卷、显示卷详情
-- `mount` / `umount` —— 挂载、卸载（支持 `--force` 强制卸载）
-- `ls` / `tree` —— 列出挂载点目录
-- `create` —— 从明文目录创建加密卷
-  - 容量检查
-  - 断点续传（检测已存在的加密后端）
-  - 进度输出（`@@PROGRESS@@` 协议行）
-  - `--dry-run` 预览
-  - `--keep-source` 保留源文件
-- `remove` —— 删除加密卷
-  - 自动挂载（若未挂载）
-  - 还原明文
-  - `--keep-cipher` / `--delete-cipher`
-  - `--dry-run` 预览
-- `config` / `edit` —— 显示配置路径、外部编辑器打开
-- `check-deps` —— 检查依赖
+- **详情栏状态**：创建后详情栏根据 `vaults` 动态判断
+  「已创建 / 待创建」
+- **禁止重复创建**：`enter_create_wizard` 双重检查；
+  CLI `cmd_create` 增加 `mount_point` 冲突检查
+- **非加密卷标记**：缺少 `gocryptfs.conf` 的条目在列表标红，
+  禁止挂载 / 卸载 / 删除
+- **向导覆盖**：向导渲染前 `Clear`，避免与底层列表重叠
+- **删除向导卡住**：`poll_task` 完成后清空 `task`
+- **参数解析**：`cli.rs` 未知参数不提前 `break`，
+  确保 `--help` / `--version` 优先生效
 
-#### TUI（`gocryptfs-tui`）
+### Documentation
 
-- 两页面结构：`[1] 挂载/卸载` 与 `[2] 创建/删除`，`Tab` 切换
-- 卷列表、详情、输出区三段布局
-- 挂载 / 卸载（密码输入框，Backspace / Delete / Ctrl+H 均可删除）
-- 创建 / 删除向导（多步状态机）
-- 目录视图（`l` / `t`，支持 `PgDn` / `PgUp` / `g` / `G` 滚动）
-- 设置浮层（`s`）：gocryptfs / rsync / filters / 权限
-- 历史浮层（`h`）：读 `history.jsonl`
-- 外部编辑器（`e`）：退出 TUI 启动 `$EDITOR`
-- 帮助浮层（`?`）
+- **README 更新**：新增"命令行参数"、"日志与历史"、"发布"、
+  "cargo-dist 安装方式"章节
+- **RELEASING.md**：新增发版流程文档
 
-#### 安全
+### Revert
 
-- 密码通过 stdin 传递，**永不落盘**
-- 挂载点未挂载时自动 `chmod 555`（只读锁定）
-- 挂载时 `chmod 755`
-- 删除加密默认保留加密后端
-- 配置策略型选项（保守值在向导中灰色只读，激进值可收紧）
-
-#### 测试
-
-- `test/create-test-env.sh` —— 生成测试环境（含加密卷初始化、pending 示例）
-- `test/cleanup-test-env.sh` —— 强制清理所有挂载和目录
-- `test/test-batch1.sh` —— list / info / ls / tree 测试
-- `test/test-batch2.sh` —— mount / umount / create / remove 测试
-- `test/test-all.sh` —— 汇总入口
-
-### 已知限制
-
-- 向导无法中止正在运行的 CLI（需等待完成）
-- 设置浮层为只读展示，修改需按 `e` 打开外部编辑器
-- 待处理目录的交互式添加未实现（需编辑配置文件）
-- 挂载点的权限切换依赖命令行 `chmod`（不支持 `chattr`，因其会阻止 gocryptfs 挂载）
-
-[Unreleased]: https://github.com/lockejet/gocryptfs-tui/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/lockejet/gocryptfs-tui/releases/tag/v0.1.0
+- **撤回配置文件 git 版本管理**：移除 `gocryptfs-cli` 的
+  `git-init` / `git-log` / `git-diff` / `git-rollback` / `git-status`
+  子命令。它们管理配置文件而非源码，与项目定位不符

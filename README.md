@@ -14,11 +14,14 @@ TUI 通过调用 CLI 完成所有实际工作，因此两者行为完全一致�
 - [特性](#特性)
 - [依赖](#依赖)
 - [安装](#安装)
+- [命令行参数](#命令行参数)
 - [配置](#配置)
 - [使用](#使用)
+- [日志与历史](#日志与历史)
 - [架构](#架构)
 - [安全设计](#安全设计)
-- [开发与测试](#开发与测试)
+- [开发](#开发)
+- [发布](#发布)
 - [许可](#许可)
 
 ---
@@ -34,6 +37,9 @@ TUI 通过调用 CLI 完成所有实际工作，因此两者行为完全一致�
 - 挂载点未挂载时自动 `chmod 555`（只读锁定），挂载时 `chmod 755`
 - 删除加密需输入 `DELETE` 二次确认
 - 支持 SMB 共享场景（挂载点始终存在）
+- **统一的 JSONL 操作日志**（CLI + TUI 共用一份）
+- **TUI 帮助菜单**（含版本信息、路径、快捷键，可导出为 `HELP.md`）
+- **cargo-release + cargo-dist 发布流程**（git tag 触发 CI 多平台构建）
 
 ---
 
@@ -48,14 +54,10 @@ TUI 通过调用 CLI 完成所有实际工作，因此两者行为完全一致�
 - `jq`
 - `tree`（可选，用于 `t` 树状视图）
 
-编译 TUI 需要：
-
-- Rust 1.70+
-
 Debian / Ubuntu 安装：
 
 ```bash
-sudo apt install gocryptfs rsync jq
+sudo apt install gocryptfs rsync jq fuse3
 sudo wget -qO /usr/local/bin/yq \
     https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
 sudo chmod +x /usr/local/bin/yq
@@ -71,44 +73,113 @@ gocryptfs-cli --check-deps
 
 ## 安装
 
-### 方式一：一键安装（推荐）
+### 方式一：官方安装脚本（推荐）
 
 ```bash
-cd /opt/vault-tui
-cargo build --release
-./install.sh
+curl --proto '=https' --tlsv1.2 -LsSf \
+    https://github.com/lockejet/gocryptfs-tui/releases/latest/download/gocryptfs-tui-installer.sh | sh
 ```
 
-`install.sh` 会：
+脚本会自动：
 
-1. 检查运行时依赖
-2. 编译 TUI（以当前用户身份）
-3. 将 shell CLI 安装到 `/usr/local/lib/gocryptfs-tui/`
-4. 将 `gocryptfs-cli` 和 `gocryptfs-tui` 符号链接到 `/usr/local/bin/`
+1. 检测系统架构（x86_64 / aarch64）
+2. 检测 libc（glibc / musl）
+3. 下载对应 tar.gz
+4. 解压到 `~/.cargo/bin` 或 `~/.local/bin`
+5. 提示 PATH 配置
 
-> 注意：`install.sh` **不要用 `sudo` 运行**（编译需要用户 cargo 环境），脚本内部会按需 `sudo`。
+### 方式二：手动下载
 
-### 方式二：手动安装
+从 [Releases 页面](https://github.com/lockejet/gocryptfs-tui/releases) 下载对应平台的包：
+
+| 平台 | 文件 |
+|------|------|
+| Linux amd64（glibc） | `gocryptfs-tui-*-linux-amd64.tar.gz` |
+| Linux arm64（glibc） | `gocryptfs-tui-*-linux-arm64.tar.gz` |
+| Linux amd64（musl 静态） | `gocryptfs-tui-*-linux-amd64-musl.tar.gz` |
+| Linux arm64（musl 静态） | `gocryptfs-tui-*-linux-arm64-musl.tar.gz` |
+
+解压后：
 
 ```bash
-cd /opt/vault-tui
-cargo build --release
+tar xzf gocryptfs-tui-*-linux-amd64.tar.gz
+cd gocryptfs-tui-*-linux-amd64
 
+# 安装 TUI
+sudo install -m 0755 gocryptfs-tui /usr/local/bin/
+
+# 安装 CLI
 sudo mkdir -p /usr/local/lib/gocryptfs-tui/lib
-sudo cp shell/lib/gocryptfs-lib.sh /usr/local/lib/gocryptfs-tui/lib/
-sudo cp shell/gocryptfs-cli /usr/local/lib/gocryptfs-tui/
+sudo cp gocryptfs-cli /usr/local/lib/gocryptfs-tui/
+sudo cp lib/gocryptfs-lib.sh /usr/local/lib/gocryptfs-tui/lib/
 sudo chmod +x /usr/local/lib/gocryptfs-tui/gocryptfs-cli
 sudo ln -sf /usr/local/lib/gocryptfs-tui/gocryptfs-cli /usr/local/bin/gocryptfs-cli
-sudo cp target/release/gocryptfs-tui /usr/local/bin/
-sudo chmod +x /usr/local/bin/gocryptfs-tui
+```
+
+### 方式三：从源码安装
+
+```bash
+git clone https://github.com/lockejet/gocryptfs-tui.git
+cd gocryptfs-tui
+make build
+make install-local     # 安装到 ~/.local/bin
 ```
 
 ### 卸载
 
 ```bash
+# 如果是 shell installer 安装的
+gocryptfs-tui-installer.sh uninstall
+
+# 如果是手动安装的
 sudo rm -rf /usr/local/lib/gocryptfs-tui
 sudo rm -f /usr/local/bin/gocryptfs-cli
 sudo rm -f /usr/local/bin/gocryptfs-tui
+```
+
+---
+
+## 命令行参数
+
+TUI 支持以下参数：
+
+```
+gocryptfs-tui [OPTIONS]
+
+OPTIONS:
+    -c, --config <PATH>    配置文件路径
+                           [默认: ~/.config/gocryptfs-tui/config.yaml]
+    -D, --data-dir <DIR>   数据目录（日志、历史、帮助）
+                           [默认: ~/.local/share/gocryptfs-tui]
+    -h, --help             显示帮助
+    -V, --version          显示版本信息
+```
+
+示例：
+
+```bash
+# 使用默认配置
+gocryptfs-tui
+
+# 指定配置文件
+gocryptfs-tui -c /path/to/config.yaml
+
+# 指定数据目录
+gocryptfs-tui -D /tmp/gocryptfs-tui-data
+
+# 查看版本
+gocryptfs-tui --version
+
+# 查看帮助
+gocryptfs-tui --help
+```
+
+TUI 顶部栏实时显示三行信息：
+
+```
+命令: /usr/local/bin/gocryptfs-tui                              v0.2.0
+CLI:  gocryptfs-cli   配置: ~/.config/gocryptfs-tui/config.yaml
+数据: ~/.local/share/gocryptfs-tui  日志: app.log.jsonl  历史: history.jsonl
 ```
 
 ---
@@ -157,6 +228,7 @@ pending: []
 - `settings.filters[]`：rsync 过滤器规则
 - `settings.create.*`：创建策略（`keep_source`、`tmp_mount_suffix`）
 - `settings.remove.*`：删除策略（`restore`、`direct_delete_cipher`）
+- `settings.logging.*`：日志级别与轮转（`level`、`max_size`、`max_files`）
 - `vaults[]`：卷列表，每项含 `id`、`name`、`path`、`mount_point`、可选 `overrides`
 - `pending[]`：待处理目录列表（用于 TAB2 创建向导）
 
@@ -178,6 +250,21 @@ pending: []
 | `remove.restore` | `false` | 可勾选还原 |
 | `remove.direct_delete_cipher` | `true` | 可勾选取消 |
 | `remove.direct_delete_cipher` | `false` | 灰色只读 |
+
+### 日志设置
+
+```yaml
+settings:
+  logging:
+    # operation   只记业务操作（mount/umount/create/remove）——推荐
+    # interactive 业务操作 + 用户交互（按键/页面/向导步骤）
+    # debug       全部记录（含内部事件）
+    level: operation
+    # 单个日志文件上限（字节），超出后轮转
+    max_size: 5242880      # 5 MB
+    # 保留的历史文件个数
+    max_files: 3
+```
 
 ---
 
@@ -221,6 +308,14 @@ echo 'your-password' | gocryptfs-cli remove photos --yes
 
 # 删除加密（保留加密后端）
 echo 'your-password' | gocryptfs-cli remove photos --keep-cipher --yes
+
+# 查看操作日志
+gocryptfs-cli log                       # 最近 20 条
+gocryptfs-cli log --src tui             # 只看 TUI
+gocryptfs-cli log --action mount        # 只看挂载
+gocryptfs-cli log --result failed       # 只看失败
+gocryptfs-cli log --follow              # 实时跟踪
+gocryptfs-cli log --json                # JSON 输出
 
 # 检查依赖
 gocryptfs-cli --check-deps
@@ -268,7 +363,7 @@ gocryptfs-tui
 | `h` | 历史浮层 |
 | `e` | 外部编辑器打开配置 |
 | `r` | 刷新 |
-| `?` | 帮助 |
+| `?` | 帮助浮层（内含 `H` 导出） |
 | `q` | 退出 |
 | `Ctrl+C` | 中断当前任务 |
 | `Ctrl+D` × 3（2 秒内） | 强制退出 |
@@ -282,11 +377,13 @@ gocryptfs-tui
 | `Enter` | 挂载 / 卸载（TAB1）/ 创建向导（TAB2）/ 删除向导（TAB3） |
 | `m` | 挂载 / 卸载（TAB1，同 Enter） |
 | `u` | 卸载（TAB1） |
+| `c` | 创建向导（TAB2，同 Enter） |
+| `d` | 删除向导（TAB3，同 Enter） |
 | `l` | 列表（ls -la）→ 加载到目录区并切换焦点 |
 | `t` | 树状（tree）→ 加载到目录区并切换焦点 |
 | `o` | 打开挂载点（xdg-open） |
 
-> **重要**：先按 `Space` 选中，再按 `Enter` 或 `m` 执行。移动光标会清除选中状态。
+> **重要**：先按 `Space` 选中，再按 `Enter` 或 `m`/`c`/`d` 执行。移动光标会清除选中状态。
 
 #### 详情 / 目录 / 输出焦点按键
 
@@ -308,6 +405,104 @@ gocryptfs-tui
 | `Enter` | 下一步 |
 | `Esc` | 取消 |
 | `Backspace` / `Delete` / `Ctrl+H` | 删除密码字符 |
+
+#### 历史浮层按键
+
+| 键 | 功能 |
+|----|------|
+| `j` / `k` / `↑` / `↓` | 移动选中 |
+| `s` | 循环切换来源过滤（全部 → cli → tui → 全部） |
+| `r` | 循环切换结果过滤（全部 → success → failed → started → cancelled → 全部） |
+| `a` | 循环切换操作过滤（全部 → mount → umount → create → remove → 全部） |
+| `Esc` | 关闭 |
+
+#### 帮助浮层按键
+
+| 键 | 功能 |
+|----|------|
+| `H` | 导出帮助到 `<data_dir>/HELP.md` |
+| `Esc` / `?` / `q` | 关闭 |
+
+---
+
+## 日志与历史
+
+### 统一日志
+
+CLI 和 TUI 的所有操作记录到**同一个文件**：
+
+```
+~/.local/share/gocryptfs-tui/app.log.jsonl
+```
+
+每行一条 JSON 记录：
+
+```json
+{
+  "ts": "2026-09-30T15:00:07+08:00",
+  "src": "cli",
+  "action": "mount",
+  "target": "test_plain",
+  "result": "success",
+  "detail": "",
+  "pid": 123456,
+  "duration_ms": 2050
+}
+```
+
+字段含义：
+
+| 字段 | 说明 |
+|------|------|
+| `ts` | ISO 8601 时间戳 |
+| `src` | 来源：`cli` 或 `tui` |
+| `action` | 动作：`mount` / `umount` / `create` / `remove` / `tui.start` / `tui.quit` |
+| `target` | 目标：卷名或描述 |
+| `result` | `started` / `success` / `failed` / `cancelled` |
+| `detail` | 附加信息（如命令行、错误细节） |
+| `pid` | 关联进程 PID（TUI 侧填写，CLI 侧为 null） |
+| `duration_ms` | 耗时（毫秒，TUI 侧填写，CLI 侧为 null） |
+
+### 日志轮转
+
+单文件超过 `settings.logging.max_size` 后：
+
+```
+app.log.jsonl  →  app.log.jsonl.1  →  app.log.jsonl.2  →  ...
+```
+
+保留 `settings.logging.max_files` 个历史文件。
+
+### 旧历史迁移
+
+早期版本使用 `history.jsonl`（字段名 `name` / `status`）。首次运行新版本时，TUI 会自动把旧文件内容迁移到 `app.log.jsonl` 并删除旧文件。字段映射：
+
+| 旧 | 新 |
+|----|----|
+| `name` | `target` |
+| `status` | `result` |
+| （无） | `src: "cli"` |
+
+### 查询
+
+CLI 侧：
+
+```bash
+gocryptfs-cli log                        # 最近 20 条（人类可读，带颜色）
+gocryptfs-cli log --limit 100            # 最近 100 条
+gocryptfs-cli log --src tui              # 只看 TUI
+gocryptfs-cli log --action mount         # 只看挂载
+gocryptfs-cli log --result failed        # 只看失败
+gocryptfs-cli log --since 2026-09-29     # 按时间过滤
+gocryptfs-cli log --follow               # 实时跟踪
+gocryptfs-cli log --json                 # JSON 输出
+```
+
+TUI 侧：
+
+- 按 `h` 打开历史浮层
+- 按 `s` / `r` / `a` 切换来源 / 结果 / 操作过滤
+- 按 `j` / `k` 移动选中
 
 ---
 
@@ -342,24 +537,34 @@ gocryptfs-tui
 ```
 gocryptfs-tui/
 ├── Cargo.toml
-├── install.sh
+├── build.rs                 # 编译期版本注入
+├── Makefile
+├── release.toml             # cargo-release 配置
+├── cliff.toml               # git-cliff 配置
+├── Cross.toml               # cross 交叉编译配置
+├── dist-workspace.toml      # cargo-dist 配置
+├── RELEASING.md             # 发版流程文档
 ├── README.md
+├── CHANGELOG.md
 ├── LICENSE
 ├── SECURITY.md
-├── CHANGELOG.md
-├── .gitignore
+├── .github/
+│   └── workflows/
+│       └── release.yml      # cargo-dist CI workflow
 ├── src/
-│   └── main.rs              # TUI 全部代码
+│   ├── main.rs              # TUI 主入口 + 渲染
+│   ├── cli.rs               # 命令行参数解析
+│   └── logger.rs            # 日志模块
 ├── shell/
 │   ├── gocryptfs-cli        # CLI 主入口
 │   └── lib/
 │       └── gocryptfs-lib.sh # 全部库函数
 ├── test/
-│   ├── create-test-env.sh   # 生成/清理测试环境
-│   ├── cleanup-test-env.sh  # 强制清理残留
-│   ├── test-batch1.sh       # list/info/ls/tree 测试
-│   ├── test-batch2.sh       # mount/umount/create/remove 测试
-│   └── test-all.sh          # 汇总入口
+│   ├── create-test-env.sh
+│   ├── cleanup-test-env.sh
+│   ├── test-batch1.sh
+│   ├── test-batch2.sh
+│   └── test-all.sh
 └── examples/
     └── config.yaml.example
 ```
@@ -407,52 +612,110 @@ TUI 捕获这些行，更新界面状态；普通 stdout/stderr 显示在输出�
 - 只有在配置显式授权（`remove.direct_delete_cipher: true`）且用户输入 `DELETE` 后才删除
 - 无法在向导中"越权"启用删除后端
 
+### 日志隐私
+
+- 日志不记录密码
+- 日志不记录明文内容
+- 日志只记录操作元数据（卷名、路径、结果）
+
 详细安全说明见 [SECURITY.md](SECURITY.md)。
 
 ---
 
-## 开发与测试
+## 开发
 
 ### 编译
 
 ```bash
-cargo build --release
+# 本机 release 编译
+make build
+
+# 调试版
+make build-debug
+
+# 交叉编译（需要 cross）
+make build-arm64
+make build-musl
+make build-arm64-musl
+make build-all
 ```
 
-### 生成测试环境
+### 检查与测试
 
 ```bash
-# 生成（含加密卷初始化、pending 示例）
-bash test/create-test-env.sh
+# 全部检查：fmt + clippy + 单元测试
+make check
 
-# 只清理
-bash test/create-test-env.sh --clean
+# 单独跑
+make fmt           # 格式化代码
+make lint          # clippy（-D warnings）
+make test          # Rust 单元测试
+make test-env      # 生成 shell 测试环境
+make test-cli      # 运行 shell 测试批次
+make test-env-clean  # 清理测试环境
 
-# 显式声明先清理再生成
-bash test/create-test-env.sh --clean-first
-
-# 保留旧环境
-bash test/create-test-env.sh --keep
+# 完整验证
+make verify
 ```
 
-### 运行所有测试
+### 本地安装
 
 ```bash
-bash test/test-all.sh
+make install-local    # 装到 ~/.local/bin
+make uninstall-local  # 卸载
 ```
 
-或单独运行：
+### 全部 Make 目标
 
 ```bash
-bash test/test-batch1.sh
-bash test/test-batch2.sh
+make help
 ```
 
-### 强制清理残留
+---
+
+## 发布
+
+本项目使用 `cargo-release` + `cargo-dist` 组合：
+
+- **cargo-release**：bump 版本、生成 CHANGELOG、打 tag、push
+- **cargo-dist**：CI 多平台构建、生成 installer、创建 GitHub Release
+
+### 前置工具
 
 ```bash
-bash test/cleanup-test-env.sh
+cargo install cargo-release --locked
+cargo install git-cliff --locked
+cargo install cargo-dist --locked
+cargo install cross --git https://github.com/cross-rs/cross    # 可选
+gh auth login
 ```
+
+### 发布步骤
+
+```bash
+# 1. 前置检查
+make release-check
+
+# 2. 预览（不执行）
+make dry-run
+
+# 3. 执行（patch 版本）
+make release
+
+# 或指定级别
+make release LEVEL=minor
+make release LEVEL=major
+
+# 4. 查看 CI 进度
+gh run watch
+
+# 5. 验证 Release
+gh release view v0.2.0 --web
+```
+
+push tag 后 GitHub Actions 自动触发 `.github/workflows/release.yml`，构建 4 个平台（gnu/musl × amd64/arm64）并创建 Release。
+
+详细流程见 [RELEASING.md](RELEASING.md)。
 
 ---
 
