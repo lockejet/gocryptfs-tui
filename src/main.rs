@@ -239,7 +239,6 @@ fn load_vaults(config: &str) -> Result<Vec<Vault>, String> {
     Ok(resp.data.vaults)
 }
 
-// 加载并（必要时）从旧 history.jsonl 迁移
 fn load_history(log_file: &Path) -> Vec<HistoryEntry> {
     let content = match std::fs::read_to_string(log_file) {
         Ok(c) => c,
@@ -251,7 +250,6 @@ fn load_history(log_file: &Path) -> Vec<HistoryEntry> {
         .collect()
 }
 
-// 启动时把旧 history.jsonl 迁移到 app.log.jsonl，然后删除旧文件
 fn migrate_old_history(data_dir: &Path) {
     let old = data_dir.join("history.jsonl");
     let new = data_dir.join("app.log.jsonl");
@@ -1573,12 +1571,16 @@ impl App {
 - `-D, --data-dir <DIR>` — 数据目录（日志、历史、帮助）\n\
 - `-h, --help` — 显示帮助\n\
 - `-V, --version` — 显示版本信息\n\n\
+## 换页与焦点\n\n\
+| 键 | 功能 |\n\
+|----|------|\n\
+| `1` / `2` / `3` | 直达换页（挂载 / 创建 / 删除）|\n\
+| `[` / `]` | 顺序换页（前一页 / 后一页，循环）|\n\
+| `Alt+1/2/3/4` | 直达换区（列表 / 详情 / 目录 / 输出）|\n\
+| `Tab` / `Shift+Tab` | 轮转换区（正向 / 反向）|\n\n\
 ## 全局键\n\n\
 | 键 | 功能 |\n\
 |----|------|\n\
-| `Tab` | 换页 |\n\
-| `1` / `2` / `3` | 直接跳页 |\n\
-| `Alt+1/2/3/4` | 焦点到 列表/详情/目录/输出 |\n\
 | `s` | 设置浮层 |\n\
 | `h` | 历史浮层 |\n\
 | `e` | 外部编辑器打开配置 |\n\
@@ -1938,11 +1940,50 @@ fn handle_key(app: &mut App, key: KeyCode, mods: KeyModifiers) {
             app.status = "已刷新".to_string();
             return;
         }
-        KeyCode::Tab | KeyCode::BackTab => {
+        KeyCode::Tab => {
+            // 轮转换区（正向）
+            app.focus = match app.focus {
+                Focus::List => Focus::Detail,
+                Focus::Detail => Focus::Dir,
+                Focus::Dir => Focus::Output,
+                Focus::Output => Focus::List,
+            };
+            return;
+        }
+        KeyCode::BackTab => {
+            // 轮转换区（反向）
+            app.focus = match app.focus {
+                Focus::List => Focus::Output,
+                Focus::Output => Focus::Dir,
+                Focus::Dir => Focus::Detail,
+                Focus::Detail => Focus::List,
+            };
+            return;
+        }
+        KeyCode::Char(']') => {
+            // 顺序换页（下一页）
             app.page = match app.page {
                 Page::Mount => Page::Create,
                 Page::Create => Page::Remove,
                 Page::Remove => Page::Mount,
+            };
+            app.focus = Focus::List;
+            app.vault_confirmed = None;
+            app.pending_confirmed = None;
+            app.dir_view = DirView::default();
+            app.status = match app.page {
+                Page::Mount => "挂载/卸载".to_string(),
+                Page::Create => "创建加密".to_string(),
+                Page::Remove => "删除加密".to_string(),
+            };
+            return;
+        }
+        KeyCode::Char('[') => {
+            // 顺序换页（上一页）
+            app.page = match app.page {
+                Page::Mount => Page::Remove,
+                Page::Create => Page::Mount,
+                Page::Remove => Page::Create,
             };
             app.focus = Focus::List;
             app.vault_confirmed = None;
@@ -2287,7 +2328,7 @@ fn render_tab_bar(f: &mut Frame, app: &App, area: Rect) {
         Span::raw("  "),
         Span::styled(" [3] 删除加密 ", tab_style(Page::Remove)),
         Span::raw("      "),
-        Span::styled("换页[Tab]", Style::default().fg(Color::Cyan)),
+        Span::styled("换页[Tab] 或 [ ]", Style::default().fg(Color::Cyan)),
     ]);
     f.render_widget(Paragraph::new(line), area);
 }
@@ -2618,7 +2659,7 @@ fn render_output(f: &mut Frame, app: &App, area: Rect) {
 fn render_status(f: &mut Frame, app: &App, area: Rect) {
     let global_line = Line::from(vec![
         Span::styled("全局: ", Style::default().fg(Color::Yellow)),
-        Span::raw("换页[Tab] 焦点[Alt+1/2/3/4] 设置[s] 历史[h] 编辑[e] 刷新[r] 帮助[?] 退出[q]"),
+        Span::raw("换页[1/2/3]或[ ] 换区[Tab/Shift+Tab]或[Alt+1/2/3/4] 设置[s] 历史[h] 编辑[e] 刷新[r] 帮助[?] 退出[q]"),
     ]);
 
     let page_hint = match app.page {
@@ -3010,10 +3051,18 @@ fn render_help_overlay(f: &mut Frame, area: Rect, app: &App) {
         Line::from("  -V, --version         显示版本信息"),
         Line::from(""),
         Line::from(Span::styled(
+            "── 换页与换区 ──",
+            Style::default().fg(Color::Cyan),
+        )),
+        Line::from("  直达换页: 1 / 2 / 3           （挂载 / 创建 / 删除）"),
+        Line::from("  顺序换页: [ 前一页，] 后一页  （均循环）"),
+        Line::from("  直达换区: Alt+1/2/3/4         （列表 / 详情 / 目录 / 输出）"),
+        Line::from("  轮转换区: Tab 正向，Shift+Tab 反向"),
+        Line::from(""),
+        Line::from(Span::styled(
             "── 全局键 ──",
             Style::default().fg(Color::Cyan),
         )),
-        Line::from("  换页[Tab] 跳页[1/2/3] 焦点[Alt+1/2/3/4]"),
         Line::from("  设置[s] 历史[h] 编辑[e] 刷新[r] 帮助[?] 退出[q]"),
         Line::from("  中断任务[Ctrl+C] 强制退出[Ctrl+D × 3 (2 秒内)]"),
         Line::from(""),
@@ -3227,7 +3276,6 @@ fn render_history_overlay(
     )));
     lines.push(Line::from(""));
 
-    // 过滤状态
     let src_str = filter.src.as_deref().unwrap_or("全部");
     let result_str = filter.result.as_deref().unwrap_or("全部");
     let action_str = filter.action.as_deref().unwrap_or("全部");
@@ -3530,7 +3578,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
 
-    // 自动迁移旧 history.jsonl → app.log.jsonl
     migrate_old_history(&data_dir);
 
     std::env::set_var("HISTORY_FILE", &history_file);
