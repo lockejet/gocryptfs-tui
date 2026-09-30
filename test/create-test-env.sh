@@ -13,7 +13,8 @@ set -euo pipefail
 
 TEST_ROOT="${TEST_ROOT:-/tmp/gocryptfs-tui-test}"
 CONFIG_FILE="$TEST_ROOT/test-config.yaml"
-DEFAULT_PASSWORD="test-password-12345"
+#DEFAULT_PASSWORD="test-password-12345"
+DEFAULT_PASSWORD="test321"
 
 # 获取当前实际运行用户（兼容 sudo）
 REAL_USER="${SUDO_USER:-$USER}"

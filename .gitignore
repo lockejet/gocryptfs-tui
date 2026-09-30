@@ -1,7 +1,10 @@
-# ===== Rust 编译产物 =====
-/target/
-**/*.rs.bk
-*.pdb
+# Rust
+/target
+
+# 构建产物
+/dist
+/.staging
+/bin
 
 # ===== 敏感配置 =====
 config.yaml
@@ -44,6 +47,4 @@ Thumbs.db
 *.bak
 *~
 config.yaml.backup
-
-# ===== 其他 =====
 /bakup/
