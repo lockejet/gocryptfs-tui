@@ -19,8 +19,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
 fi
 
 # § 1. 常量
-LOG_FILE="${LOG_FILE:-/tmp/gocryptfs-tui.log}"
-HISTORY_FILE="${HISTORY_FILE:-$HOME/.local/share/gocryptfs-tui/history.jsonl}"
+LOG_FILE="${LOG_FILE:-$HOME/.local/share/gocryptfs-tui/app.log.jsonl}"
 LOCK_FILE="${LOCK_FILE:-/tmp/gocryptfs-tui.lock}"
 EXIT_OK=0; EXIT_ERROR=1; EXIT_PASSWORD=2; EXIT_STATE=3
 EXIT_MOUNTPOINT=4; EXIT_NOSPACE=5; EXIT_UMOUNT=6
@@ -32,7 +31,16 @@ show_help() {
 gocryptfs-cli - gocryptfs-tui 的 Shell 后端
 用法: gocryptfs-cli [-c <config>] <command> [options]
 命令: list / info / ls / tree / mount / umount / create / remove
-      config / edit / check-deps / help
+      config / edit / check-deps / log / help
+
+log 子命令选项:
+  --limit N        显示最近 N 条（默认 20）
+  --src SRC        过滤来源: cli / tui
+  --action ACTION  过滤操作: mount / umount / create / remove / tui.start / ...
+  --result RESULT  过滤结果: success / failed / started / cancelled
+  --since DATE     起始时间（ISO 8601）
+  --follow         实时跟踪（类似 tail -f）
+  --json           JSON 输出
 EOF
 }
 
@@ -51,11 +59,28 @@ check_deps() {
 # § 3. 日志
 log_line() {
     printf '[%s] %s\n' "$(date '+%H:%M:%S')" "$1" >&2
-    printf '[%s] %s\n' "$(date -Iseconds)" "$1" >> "$LOG_FILE" 2>/dev/null || true
 }
+
 log_error() {
     printf '[!] %s\n' "$1" >&2
-    printf '[%s] ERROR: %s\n' "$(date -Iseconds)" "$1" >> "$LOG_FILE" 2>/dev/null || true
+}
+
+# 结构化事件日志（JSONL）
+# 参数: $1=action $2=target $3=result $4=detail
+log_event() {
+    local action="$1" target="$2" result="$3" detail="${4:-}"
+
+    mkdir -p "$(dirname "$LOG_FILE")"
+
+    jq -cn \
+        --arg ts "$(date -Iseconds)" \
+        --arg src "cli" \
+        --arg action "$action" \
+        --arg target "$target" \
+        --arg result "$result" \
+        --arg detail "$detail" \
+        '{ts:$ts,src:$src,action:$action,target:$target,result:$result,detail:$detail,pid:null,duration_ms:null}' \
+        >> "$LOG_FILE" 2>/dev/null || true
 }
 
 # § 4. 协议
@@ -91,7 +116,7 @@ vault_exists() {
 }
 get_setting() {
     local val
-    val=$(yq -r ".settings.$1 // \"\"" "$CONFIG_FILE")
+    val=$(yq -r ".settings.$1 // \"\"" "$CONFIG_FILE" 2>/dev/null)
     if [ -z "$val" ] || [ "$val" = "null" ]; then echo "${2:-}"; else echo "$val"; fi
 }
 get_effective_setting() {
@@ -165,7 +190,6 @@ gocryptfs_with_password() {
         return 1
     }
 
-    # 判断是否 -init（同步执行，无挂载点）
     local is_init=false
     for arg in "$@"; do
         [ "$arg" = "-init" ] && is_init=true && break
@@ -174,19 +198,14 @@ gocryptfs_with_password() {
     local rc=0
 
     if [ "$is_init" = true ]; then
-        # ===== -init：同步执行 =====
         gocryptfs -passfile "$passfile" "$@" > "$output_file" 2>&1
         rc=$?
     else
-        # ===== 挂载：后台执行 + 轮询挂载点 =====
-        # 挂载点是最后一个参数
         local mount_point="${!#}"
 
-        # 后台执行，stdin 重定向到 /dev/null 避免阻塞
         gocryptfs -passfile "$passfile" "$@" < /dev/null > "$output_file" 2>&1 &
         local gpid=$!
 
-        # 轮询最多 30 秒（300 次 × 100ms）
         local mounted=false
         local waited=0
         while [ "$waited" -lt 300 ]; do
@@ -194,9 +213,7 @@ gocryptfs_with_password() {
                 mounted=true
                 break
             fi
-            # 检查 gocryptfs 进程是否还活着
             if ! kill -0 "$gpid" 2>/dev/null; then
-                # 进程已退出（失败），收集退出码
                 wait "$gpid" 2>/dev/null
                 rc=$?
                 break
@@ -206,12 +223,8 @@ gocryptfs_with_password() {
         done
 
         if [ "$mounted" = true ]; then
-            # 挂载成功
             rc=0
-            # 注意：不 wait，让 gocryptfs 后台进程继续运行
-            # gocryptfs 默认 daemonize，父进程退出后子进程独立运行
         elif [ "$rc" = "0" ] && [ "$mounted" = false ]; then
-            # 超时（进程没退出但挂载点没出现）
             kill "$gpid" 2>/dev/null || true
             wait "$gpid" 2>/dev/null || true
             rc=1
@@ -219,20 +232,17 @@ gocryptfs_with_password() {
         fi
     fi
 
-    # 读取输出
     if [ -z "$GOCRYPTFS_LAST_OUTPUT" ]; then
         GOCRYPTFS_LAST_OUTPUT=$(cat "$output_file" 2>/dev/null)
     fi
     if [ -n "$GOCRYPTFS_LAST_OUTPUT" ]; then
         printf '%s\n' "$GOCRYPTFS_LAST_OUTPUT" >&2
-        printf '%s\n' "$GOCRYPTFS_LAST_OUTPUT" >> "$LOG_FILE" 2>/dev/null || true
     fi
 
     rm -f "$output_file" "$passfile"
     return $rc
 }
 
-# 判断 gocryptfs 输出是否为密码错误
 gocryptfs_output_is_password_error() {
     printf '%s' "$GOCRYPTFS_LAST_OUTPUT" | grep -qiE 'password.*incorrect|incorrect.*password|fatal: password|Wrong password'
 }
@@ -267,16 +277,7 @@ acquire_lock() {
     flock -n 200 || emit_error $EXIT_CONFIG "另一个进程正在运行"
 }
 
-# § 11. 历史
-log_history() {
-    mkdir -p "$(dirname "$HISTORY_FILE")"
-    jq -cn --arg ts "$(date -Iseconds)" --arg action "$1" --arg name "$2" \
-        --arg status "$3" --arg detail "${4:-}" \
-        '{ts:$ts,action:$action,name:$name,status:$status,detail:$detail}' \
-        >> "$HISTORY_FILE" 2>/dev/null || true
-}
-
-# § 12. 确认
+# § 11. 确认
 confirm() {
     [ "$JSON_MODE" = true ] && return 0
     local prompt="$1" default="${2:-n}" hint="[y/N]"
@@ -286,7 +287,7 @@ confirm() {
     [[ "$r" =~ ^[Yy]$ ]]
 }
 
-# § 13. list / info
+# § 12. list / info
 cmd_list() {
     require_config
     if [ "$JSON_MODE" = true ]; then _list_json; else _list_table; fi
@@ -295,11 +296,12 @@ _list_json() {
     local vaults_json="[]" count
     count=$(yq -r '.vaults // [] | length' "$CONFIG_FILE" 2>/dev/null || echo 0)
     for ((i=0; i<count; i++)); do
-        local id name path mp mounted=false locked=false
+        local id name path mp mounted=false locked=false valid=false
         id=$(yq -r ".vaults[$i].id // 0" "$CONFIG_FILE" 2>/dev/null)
         name=$(yq -r ".vaults[$i].name // \"\"" "$CONFIG_FILE" 2>/dev/null)
         path=$(yq -r ".vaults[$i].path // \"\"" "$CONFIG_FILE" 2>/dev/null)
         mp=$(yq -r ".vaults[$i].mount_point // \"\"" "$CONFIG_FILE" 2>/dev/null)
+        [ -n "$path" ] && [ -f "$path/gocryptfs.conf" ] && valid=true
         is_mounted "$mp" && mounted=true
         if [ "$mounted" = false ] && [ -d "$mp" ]; then
             local m; m=$(stat -c '%a' "$mp" 2>/dev/null); m="${m: -3}"
@@ -310,7 +312,8 @@ _list_json() {
             --argjson id "${id:-0}" \
             --arg name "$name" --arg path "$path" --arg mp "$mp" \
             --argjson mounted "$mounted" --argjson locked "$locked" \
-            '$prev + [{id:$id,name:$name,path:$path,mount_point:$mp,mounted:$mounted,locked:$locked}]')
+            --argjson valid "$valid" \
+            '$prev + [{id:$id,name:$name,path:$path,mount_point:$mp,mounted:$mounted,locked:$locked,valid:$valid}]')
     done
     jq -cn --argjson vaults "$vaults_json" '{status:"ok",data:{vaults:$vaults}}'
     printf '@@DONE@@ list\n' >&2
@@ -325,10 +328,13 @@ _list_table() {
     printf '%-20s %-12s %-10s %s\n' "NAME" "STATUS" "LOCKED" "MOUNT"
     printf '%-20s %-12s %-10s %s\n' "----" "------" "------" "-----"
     for ((i=0; i<count; i++)); do
-        local name mp status locked_str
+        local name path mp status locked_str
         name=$(yq -r ".vaults[$i].name // \"\"" "$CONFIG_FILE")
+        path=$(yq -r ".vaults[$i].path // \"\"" "$CONFIG_FILE")
         mp=$(yq -r ".vaults[$i].mount_point // \"\"" "$CONFIG_FILE")
-        if is_mounted "$mp"; then
+        if [ ! -f "$path/gocryptfs.conf" ]; then
+            status="invalid"; locked_str="-"
+        elif is_mounted "$mp"; then
             status="mounted"; locked_str="-"
         else
             status="unmounted"
@@ -347,10 +353,11 @@ cmd_info() {
     local name="$1"
     [ -z "$name" ] && emit_error $EXIT_ERROR "用法: info <name>"
     vault_exists "$name" || emit_error $EXIT_ERROR "卷不存在: $name"
-    local id path mp mounted=false locked=false mode="-"
+    local id path mp mounted=false locked=false valid=false mode="-"
     id=$(get_vault_field "$name" "id")
     path=$(get_vault_field "$name" "path")
     mp=$(get_vault_field "$name" "mount_point")
+    [ -f "$path/gocryptfs.conf" ] && valid=true
     is_mounted "$mp" && mounted=true
     if [ -d "$mp" ]; then
         mode=$(stat -c '%a' "$mp" 2>/dev/null)
@@ -360,16 +367,18 @@ cmd_info() {
         jq -cn --argjson id "${id:-0}" --arg name "$name" --arg path "$path" \
             --arg mp "$mp" --argjson mounted "$mounted" \
             --argjson locked "$locked" --arg mode "$mode" \
-            '{status:"ok",data:{id:$id,name:$name,path:$path,mount_point:$mp,mounted:$mounted,locked:$locked,mode:$mode}}'
+            --argjson valid "$valid" \
+            '{status:"ok",data:{id:$id,name:$name,path:$path,mount_point:$mp,mounted:$mounted,locked:$locked,mode:$mode,valid:$valid}}'
         printf '@@DONE@@ info\n' >&2
     else
         echo "ID: $id"; echo "名称: $name"
         echo "加密路径: $path"; echo "挂载点: $mp"
-        echo "已挂载: $mounted"; echo "已锁定: $locked"; echo "权限: $mode"
+        echo "已挂载: $mounted"; echo "已锁定: $locked"
+        echo "权限: $mode"; echo "有效: $valid"
     fi
 }
 
-# § 14. ls / tree
+# § 13. ls / tree
 cmd_ls() {
     require_config
     local name="$1"
@@ -410,7 +419,7 @@ cmd_tree() {
     fi
 }
 
-# § 15. mount
+# § 14. mount
 cmd_mount() {
     require_config
     local name="$1"
@@ -423,6 +432,8 @@ cmd_mount() {
 
     is_mounted "$mp" && emit_error $EXIT_STATE "卷已挂载: $name"
     [ -d "$path" ] || emit_error $EXIT_ERROR "加密目录不存在: $path"
+    [ -f "$path/gocryptfs.conf" ] || \
+        emit_error $EXIT_ERROR "不是有效的 gocryptfs 加密卷（缺少 gocryptfs.conf）: $name"
 
     [ ! -d "$mp" ] && { log_line "创建挂载点: $mp"; [ "$DRY_RUN" = false ] && mkdir -p "$mp"; }
 
@@ -457,7 +468,7 @@ cmd_mount() {
 
     if ! gocryptfs_with_password "$password" "${opts[@]}" "$path" "$mp"; then
         lock_dir "$mp"
-        log_history "mount" "$name" "failed"
+        log_event "mount" "$name" "failed"
         if gocryptfs_output_is_password_error; then
             emit_error $EXIT_PASSWORD "密码错误"
         else
@@ -467,15 +478,15 @@ cmd_mount() {
 
     if ! is_mounted "$mp"; then
         lock_dir "$mp"
-        log_history "mount" "$name" "failed"
+        log_event "mount" "$name" "failed"
         emit_error $EXIT_ERROR "挂载失败: $name（gocryptfs 未成功挂载）"
     fi
 
-    log_history "mount" "$name" "success"
+    log_event "mount" "$name" "success"
     emit_done "已挂载: $name"
 }
 
-# § 16. umount
+# § 15. umount
 cmd_umount() {
     require_config
     local name="" force=false
@@ -505,21 +516,21 @@ cmd_umount() {
     if [ "$rc" -ne 0 ]; then
         if [ "$force" = true ]; then
             fusermount -u -z "$mp" 2>&1 || {
-                log_history "umount" "$name" "failed-force"
+                log_event "umount" "$name" "failed" "强制卸载也失败"
                 emit_error $EXIT_UMOUNT_FORCE "强制卸载失败: $name"
             }
         else
-            log_history "umount" "$name" "failed"
+            log_event "umount" "$name" "failed"
             emit_error $EXIT_UMOUNT "卸载失败: $name（可尝试 --force）"
         fi
     fi
 
     lock_dir "$mp"
-    log_history "umount" "$name" "success"
+    log_event "umount" "$name" "success"
     emit_done "已卸载: $name"
 }
 
-# § 17. create
+# § 16. create
 cmd_create() {
     require_config
 
@@ -540,6 +551,12 @@ cmd_create() {
     [ -z "$name" ] && emit_error $EXIT_ERROR "缺少 --name"
     [ -d "$src" ]  || emit_error $EXIT_ERROR "源目录不存在: $src"
     src="${src%/}"
+
+    local existing
+    existing=$(yq -r ".vaults[] | select(.mount_point == \"$src\") | .name" "$CONFIG_FILE" 2>/dev/null | head -1)
+    if [ -n "$existing" ]; then
+        emit_error $EXIT_STATE "源目录 $src 已绑定卷「$existing」，请先删除或使用其他源目录"
+    fi
 
     [ -z "$cipher" ] && cipher="$(dirname "$src")/.cipher.d/$name"
 
@@ -574,7 +591,6 @@ cmd_create() {
         return 0
     fi
 
-    # 1. 初始化
     if [ "$is_resume" = false ]; then
         log_line "创建加密后端: $cipher"
         mkdir -p "$cipher" || emit_error $EXIT_ERROR "无法创建 $cipher"
@@ -584,7 +600,6 @@ cmd_create() {
         fi
     fi
 
-    # 2. 挂载到临时点
     mkdir -p "$tmp_mount"
     is_mounted "$tmp_mount" && fusermount -u "$tmp_mount" 2>/dev/null || true
 
@@ -597,20 +612,18 @@ cmd_create() {
         fi
     fi
 
-    # 3. rsync 迁移
     log_line "开始迁移: $src → $tmp_mount"
     local rsync_opts=("-a" "-h")
     [ "$keep_source" = "true" ] || rsync_opts+=("--remove-source-files")
 
     if ! rsync "${rsync_opts[@]}" "$src/" "$tmp_mount/" 2>&1; then
         fusermount -u "$tmp_mount" 2>/dev/null || true
-        log_history "create" "$name" "failed-rsync"
+        log_event "create" "$name" "failed" "rsync 迁移失败"
         emit_error $EXIT_ERROR "rsync 迁移失败"
     fi
 
     [ "$keep_source" = "false" ] && find "$src" -mindepth 1 -type d -empty -delete 2>/dev/null || true
 
-    # 4. 二次确认
     if [ "$yes" = false ] && [ "$JSON_MODE" != true ] && [ -t 0 ]; then
         confirm "确认替换挂载点 $src ？" "n" || {
             fusermount -u "$tmp_mount" 2>/dev/null || true
@@ -637,17 +650,17 @@ cmd_create() {
         emit_error $EXIT_ERROR "最终挂载失败"
     fi
 
-    # 5. 更新配置
     local new_id
     new_id=$(yq -r '[.vaults // [] | .[].id] | max // 0' "$CONFIG_FILE" 2>/dev/null || echo 0)
     new_id=$((new_id + 1))
     yq -i ".vaults += [{\"id\": $new_id, \"name\": \"$name\", \"path\": \"$cipher\", \"mount_point\": \"$src\"}]" "$CONFIG_FILE"
+    yq -i ".pending = [(.pending // [])[] | select(.source_dir != \"$src\")]" "$CONFIG_FILE" 2>/dev/null || true
 
-    log_history "create" "$name" "success"
+    log_event "create" "$name" "success"
     emit_done "创建完成: $name"
 }
 
-# § 18. remove
+# § 17. remove
 cmd_remove() {
     require_config
 
@@ -699,7 +712,6 @@ cmd_remove() {
         target_path=$(get_setting "remove.restore_target_custom" "$mp")
     fi
 
-    # CLI 交互模式需要 DELETE 确认
     if [ "$yes" = false ] && [ -t 0 ]; then
         printf '警告：将删除加密卷并还原明文。\n' >&2
         printf '请输入 DELETE 确认: ' >&2
@@ -746,7 +758,7 @@ cmd_remove() {
         if ! rsync -a -h "$mp/" "$migrate_to/" 2>&1; then
             fusermount -u "$mp" 2>/dev/null || true
             lock_dir "$mp"
-            log_history "remove" "$name" "failed-rsync"
+            log_event "remove" "$name" "failed" "rsync 迁移失败"
             emit_error $EXIT_ERROR "rsync 迁移失败"
         fi
     fi
@@ -771,6 +783,76 @@ cmd_remove() {
 
     yq -i "del(.vaults[] | select(.name == \"$name\"))" "$CONFIG_FILE"
 
-    log_history "remove" "$name" "success"
+    log_event "remove" "$name" "success"
     emit_done "删除完成: $name"
+}
+
+# § 18. log
+cmd_log() {
+    local limit=20 src="" action="" result="" since="" follow=false
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --limit)  limit="$2"; shift 2 ;;
+            --src)    src="$2"; shift 2 ;;
+            --action) action="$2"; shift 2 ;;
+            --result) result="$2"; shift 2 ;;
+            --since)  since="$2"; shift 2 ;;
+            --follow) follow=true; shift ;;
+            -*) emit_error $EXIT_ERROR "未知选项: $1" ;;
+            *) shift ;;
+        esac
+    done
+
+    if [ ! -f "$LOG_FILE" ]; then
+        echo "（暂无日志: $LOG_FILE）"
+        return 0
+    fi
+
+    # 构造 jq 过滤器
+    local filter="."
+    [ -n "$src" ]    && filter="$filter | select(.src == \"$src\")"
+    [ -n "$action" ] && filter="$filter | select(.action == \"$action\")"
+    [ -n "$result" ] && filter="$filter | select(.result == \"$result\")"
+    [ -n "$since" ]  && filter="$filter | select(.ts >= \"$since\")"
+
+    if [ "$follow" = true ]; then
+        tail -f "$LOG_FILE" | jq -c --unbuffered "$filter"
+        return 0
+    fi
+
+    if [ "$JSON_MODE" = true ]; then
+        tail -n "$limit" "$LOG_FILE" | jq -c "$filter"
+        return 0
+    fi
+
+    # 人类可读（带颜色，仅 TTY 时启用）
+    local green="" red="" yellow="" cyan="" reset=""
+    if [ -t 1 ]; then
+        green=$(tput setaf 2 2>/dev/null || echo "")
+        red=$(tput setaf 1 2>/dev/null || echo "")
+        yellow=$(tput setaf 3 2>/dev/null || echo "")
+        cyan=$(tput setaf 6 2>/dev/null || echo "")
+        reset=$(tput sgr0 2>/dev/null || echo "")
+    fi
+
+    tail -n "$limit" "$LOG_FILE" \
+        | jq -r "$filter | [.ts // \"\", .src // \"\", .action // \"\", .target // \"\", .result // \"\", .detail // \"\"] | @tsv" \
+        | while IFS=$'\t' read -r ts src action target result detail; do
+            local t
+            if [ ${#ts} -ge 19 ]; then
+                t="${ts:11:8}"
+            else
+                t="$ts"
+            fi
+            local c=""
+            case "$result" in
+                success)   c="$green" ;;
+                failed)    c="$red" ;;
+                started)   c="$cyan" ;;
+                cancelled) c="$yellow" ;;
+            esac
+            printf '%s%s  %-4s  %-12s  %-22s  %-10s  %s%s\n' \
+                "$c" "$t" "$src" "$action" "$target" "$result" "$detail" "$reset"
+        done
 }

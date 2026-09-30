@@ -14,7 +14,6 @@ LIB_DIR="$SCRIPT_DIR/lib"
 if [ -f "$LIB_DIR/gocryptfs-lib.sh" ]; then
     source "$LIB_DIR/gocryptfs-lib.sh"
 else
-    # 兼容旧版：按需 source
     source "$LIB_DIR/common.sh"
 fi
 
@@ -70,6 +69,7 @@ case "$COMMAND" in
     umount)     cmd_umount "$@" ;;
     create)     cmd_create "$@" ;;
     remove)     cmd_remove "$@" ;;
+    log)        cmd_log "$@" ;;
     config)     echo "$CONFIG_FILE" ;;
     edit)       ${EDITOR:-nano} "$CONFIG_FILE" ;;
     check-deps) check_deps ;;
