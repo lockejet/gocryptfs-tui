@@ -10,6 +10,9 @@
 
 set -uo pipefail
 
+# 固定界面语言为默认（zh-CN），避免受运行环境 locale 影响
+LC_ALL=C; export LC_ALL
+
 SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd -P "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"

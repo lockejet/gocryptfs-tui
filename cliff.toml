@@ -22,6 +22,8 @@ conventional_commits = true
 filter_unconventional = false
 split_commits = false
 commit_parsers = [
+    # 已由 changelog.d/ 片段描述改动时，提交信息里写 [skip changelog] 避免重复
+    { message = "\\[skip changelog\\]", skip = true },
     { message = "^feat",     group = "Features" },
     { message = "^fix",      group = "Bug Fixes" },
     { message = "^doc",      group = "Documentation" },

@@ -9,6 +9,10 @@
 BIN        := gocryptfs-tui
 BUILD_DIR  := target/release
 DIST_DIR   := dist
+CHANGELOG          := CHANGELOG.md
+CHANGELOG_DIR      := changelog.d
+CHANGELOG_STAGE    := .staging/CHANGELOG.generated.md
+CHANGELOG_PREVIEW  := .staging/CHANGELOG.preview.md
 
 # ---------- 版本（从 git tag 推导）----------
 BUILD_VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -24,6 +28,11 @@ LEVEL   ?= patch         # cargo release 的升级级别: patch / minor / major
 # ---------- 安装路径（install-local 用）----------
 PREFIX  ?= $(HOME)/.local
 BINDIR  ?= $(PREFIX)/bin
+# Shell 后端与 TUI 必须成套安装，否则 TUI 会调用旧的 gocryptfs-cli（输出语言不一致）
+SHELL_LIBDIR ?= $(PREFIX)/lib/gocryptfs-tui
+SHELL_BINDIR ?= $(BINDIR)
+# 系统级安装（install-system / uninstall-system 用）
+SYSTEM_PREFIX ?= /usr/local
 
 # ---------- 交叉编译目标 ----------
 CROSS_TARGETS := aarch64-unknown-linux-gnu \
@@ -84,7 +93,11 @@ build-all:  ## 交叉编译全部目标（gnu/musl × amd64/arm64）
 # ============================================================
 
 .PHONY: check
-check: fmt-check lint test  ## 运行全部检查：fmt + clippy + 单元测试
+check: fmt-check lint i18n-check changelog-check test  ## 运行全部检查：fmt + clippy + i18n + changelog + 单元测试
+
+.PHONY: i18n-check
+i18n-check:  ## 校验 i18n 键表、调用点参数与中文残留
+	python3 tools/i18n_check.py
 
 .PHONY: lint
 lint:  ## 运行 clippy（-D warnings）
@@ -102,6 +115,10 @@ fmt-check:  ## 检查代码格式（不修改）
 test:  ## 运行 Rust 单元测试
 	cargo test
 
+.PHONY: test-i18n
+test-i18n: build-debug  ## 运行 i18n 验收测试（TUI + Shell 语言解析矩阵）
+	bash test/test-i18n.sh
+
 .PHONY: test-cli
 test-cli: build  ## 运行 CLI shell 测试批次
 	bash test/test-all.sh
@@ -116,7 +133,7 @@ test-env-clean:  ## 清理 shell 测试环境
 	bash test/cleanup-test-env.sh
 
 .PHONY: verify
-verify: check test-cli  ## 完整验证：静态检查 + 单元测试 + CLI 测试
+verify: check test-i18n test-cli  ## 完整验证：静态检查 + 单元测试 + i18n + CLI 测试
 	@echo ">>> 验证二进制:"
 	@$(BUILD_DIR)/$(BIN) --version || true
 	@echo ">>> 全部通过"
@@ -126,13 +143,38 @@ verify: check test-cli  ## 完整验证：静态检查 + 单元测试 + CLI 测�
 # ============================================================
 
 .PHONY: changelog
-changelog:  ## 用 git-cliff 生成 CHANGELOG.md
+.PHONY: _changelog-gen
+_changelog-gen:  # 内部：git-cliff 生成到 .staging/（TAG 非空则用该标签命名段落）
 	@command -v git-cliff >/dev/null 2>&1 || { \
 		echo "错误: 未安装 git-cliff。安装: cargo install git-cliff"; \
 		exit 1; \
 	}
-	git-cliff -o CHANGELOG.md
-	@echo ">>> CHANGELOG.md"
+	@mkdir -p "$(dir $(CHANGELOG_STAGE))"
+	@if [ -n "$(TAG)" ]; then echo ">>> 段落标题: $(TAG)"; git cliff --tag "$(TAG)" -o $(CHANGELOG_STAGE); \
+	else echo ">>> 段落标题: [unreleased]"; git cliff -o $(CHANGELOG_STAGE); fi
+
+.PHONY: changelog-check
+changelog-check:  ## 校验 changelog.d/ 片段格式与合并逻辑
+	@python3 tools/changelog_fragments.py --selftest
+	@python3 tools/changelog_fragments.py check --fragments $(CHANGELOG_DIR)
+
+.PHONY: changelog
+changelog: _changelog-gen  ## 显式生成 CHANGELOG.md（重写文件；片段保留，发布时才归档）
+	@echo ">>> 注意: 将重写 $(CHANGELOG)（先看差异可用 make changelog-preview）"
+	python3 tools/changelog_fragments.py merge \
+		--generated $(CHANGELOG_STAGE) --fragments $(CHANGELOG_DIR) \
+		--merge-into $(if $(TAG),first,unreleased) --tag "$(TAG)" \
+		$(if $(ARCHIVE_FRAGMENTS),--archive $(CHANGELOG_DIR)/archive,) \
+		--output $(CHANGELOG)
+
+.PHONY: changelog-preview
+changelog-preview: _changelog-gen  ## 预览合并结果到 .staging/（不改动 CHANGELOG.md、不归档片段）
+	python3 tools/changelog_fragments.py merge \
+		--generated $(CHANGELOG_STAGE) --fragments $(CHANGELOG_DIR) \
+		--merge-into $(if $(TAG),first,unreleased) --tag "$(TAG)" \
+		--output $(CHANGELOG_PREVIEW)
+	@echo ">>> 预览: $(CHANGELOG_PREVIEW)"
+	@echo "    对比: git diff --no-index -- $(CHANGELOG) $(CHANGELOG_PREVIEW)"
 
 .PHONY: version
 version:  ## 显示版本相关信息（从 git 推导）
@@ -147,23 +189,41 @@ version:  ## 显示版本相关信息（从 git 推导）
 # ============================================================
 
 .PHONY: dry-run
-dry-run:  ## 预览 cargo-release 动作（不执行，默认 LEVEL=patch）
+dry-run:  ## 预览 cargo-release 动作（只读，不会改动任何文件；默认 LEVEL=patch）
 	cargo release $(LEVEL)
 
 .PHONY: release
-release: check  ## 执行 cargo-release（bump + changelog + tag + push，触发 CI）
+release: check release-check  ## 生成并提交 CHANGELOG（含片段）后发布（bump + tag + push）
+	@next=$$(cargo release version $(LEVEL) 2>&1 | sed -n 's/.*Upgrading .* to \([0-9][^ ]*\).*/\1/p' | tail -1); \
+	if [ -n "$$next" ]; then \
+		echo ">>> 下一版本: v$$next"; \
+		$(MAKE) --no-print-directory changelog TAG="v$$next" ARCHIVE_FRAGMENTS=1; \
+	else \
+		echo "[!] 未能解析下一版本，CHANGELOG 段落将使用 [Unreleased]"; \
+		$(MAKE) --no-print-directory changelog; \
+	fi
+	@git add $(CHANGELOG) $(CHANGELOG_DIR)
+	@if ! git diff --cached --quiet; then \
+		git commit -m "docs: 更新 CHANGELOG"; \
+		echo ">>> 已提交 CHANGELOG（含片段归档）"; \
+	else \
+		echo ">>> CHANGELOG 无变化，无需提交"; \
+	fi
 	cargo release $(LEVEL) --execute
 
 .PHONY: release-check
-release-check:  ## 检查发布前置条件（git 干净、gh 已登录、tag 可用）
-	@git diff --quiet || { echo "错误: 工作区有未提交改动"; exit 1; }
+release-check:  ## 检查发布前置条件（除 CHANGELOG.md 外工作区干净、gh 已登录）
+	@git diff --quiet -- . ':(exclude)$(CHANGELOG)' || { \
+		echo "错误: 工作区有未提交改动（$(CHANGELOG) 除外）"; exit 1; }
 	@git diff --cached --quiet || { echo "错误: 有已暂存未提交改动"; exit 1; }
 	@[ -n "$(REPO)" ] || { echo "错误: 无法从 git remote 解析仓库"; exit 1; }
 	@command -v gh >/dev/null 2>&1 || { echo "错误: 未安装 gh CLI"; exit 1; }
 	@gh auth status >/dev/null 2>&1 || { echo "错误: gh 未登录"; exit 1; }
 	@echo ">>> 前置检查通过"
 	@echo "    REPO = $(REPO)"
-	@echo "    下一版本 = $(VERSION)"
+	@echo "    当前版本 = $(VERSION)"
+	@next=$$(cargo release version $(LEVEL) 2>&1 | sed -n 's/.*Upgrading .* to \([0-9][^ ]*\).*/\1/p' | tail -1); \
+	echo "    下一版本 = $${next:-未知（请手动确认）}"
 
 .PHONY: dist-build
 dist-build:  ## 用 cargo-dist 本地构建所有平台（生成 dist/ 产物）
@@ -182,17 +242,44 @@ dist-plan:  ## 预览 cargo-dist 构建计划
 # 安装
 # ============================================================
 
+.PHONY: install
+install: install-local  ## 安装到 $(PREFIX)（默认 ~/.local，等价 install-local）
+
 .PHONY: install-local
-install-local: build  ## 安装到 ~/.local/bin（开发用；正式安装请用 cargo-dist 生成的 installer）
-	@install -d "$(BINDIR)"
+install-local: build  ## 安装到 $(PREFIX)（默认 ~/.local；TUI + Shell 后端成套安装）
+	@install -d "$(BINDIR)" "$(SHELL_LIBDIR)/lib"
 	install -m 0755 "$(BUILD_DIR)/$(BIN)" "$(BINDIR)/$(BIN)"
+	install -m 0644 shell/lib/*.sh "$(SHELL_LIBDIR)/lib/"
+	install -m 0755 shell/gocryptfs-cli "$(SHELL_LIBDIR)/gocryptfs-cli"
+	ln -sf "$(SHELL_LIBDIR)/gocryptfs-cli" "$(SHELL_BINDIR)/gocryptfs-cli"
 	@echo ">>> 已安装到 $(BINDIR)/$(BIN)"
-	@echo "    确保 $(BINDIR) 在 PATH 中"
+	@echo ">>> 已安装 shell 后端: $(SHELL_BINDIR)/gocryptfs-cli -> $(SHELL_LIBDIR)/gocryptfs-cli"
+	@echo "    确保 $(BINDIR) 在 PATH 中且在 /usr/local/bin 之前（避免调用到旧版 CLI）"
+
+.PHONY: install-system
+install-system:  ## 安装到 $(SYSTEM_PREFIX)（默认 /usr/local，内部按需 sudo）
+	bash install.sh --prefix "$(SYSTEM_PREFIX)"
+
+.PHONY: uninstall
+uninstall:  ## 卸载 $(PREFIX) 中的安装（默认 ~/.local；改 PREFIX=/usr/local 可卸系统安装）
+	@case "$(SHELL_LIBDIR)" in */lib/gocryptfs-tui) ;; *) \
+		echo "[!] 拒绝删除异常路径: $(SHELL_LIBDIR)"; exit 1;; esac
+	@[ "$(PREFIX)" != "/" ] || { echo "[!] PREFIX 不能是 /"; exit 1; }
+	-rm -f "$(BINDIR)/$(BIN)"
+	-rm -f "$(SHELL_BINDIR)/gocryptfs-cli"
+	-rm -rf "$(SHELL_LIBDIR)"
+	@echo ">>> 已卸载 $(BINDIR)/$(BIN) 与 $(SHELL_LIBDIR)"
+	@resolved="$$(command -v gocryptfs-cli 2>/dev/null || true)"; \
+	if [ -n "$$resolved" ]; then \
+		echo "    提示: PATH 中仍能解析到 $$resolved（可能是另一份旧安装）"; \
+	fi
 
 .PHONY: uninstall-local
-uninstall-local:  ## 卸载 ~/.local/bin 中的二进制
-	-rm -f "$(BINDIR)/$(BIN)"
-	@echo ">>> 已卸载 $(BINDIR)/$(BIN)"
+uninstall-local: uninstall  ## 兼容别名，等价 make uninstall
+
+.PHONY: uninstall-system
+uninstall-system:  ## 卸载 $(SYSTEM_PREFIX) 中的安装（默认 /usr/local，内部按需 sudo）
+	bash install.sh --uninstall --prefix "$(SYSTEM_PREFIX)"
 
 # ============================================================
 # 清理
@@ -242,13 +329,15 @@ help:  ## 显示本帮助
 	@echo "  make test-env-clean    清理 shell 测试环境"
 	@echo "  make verify            完整验证（check + test-cli + 二进制自检）"
 	@echo ""
-	@echo "版本与 CHANGELOG:"
+	@echo "版本与 CHANGELOG（均为显式操作，dry-run 不会改动文件）:"
 	@echo "  make version           显示 git 推导的版本信息"
-	@echo "  make changelog         用 git-cliff 生成 CHANGELOG.md"
+	@echo "  make changelog         生成/重写 CHANGELOG.md（合并并归档 changelog.d/ 片段）"
+	@echo "  make changelog-preview 仅生成预览到 .staging/（不动 CHANGELOG.md）"
+	@echo "  make changelog-check   校验 changelog.d/ 片段格式与合并逻辑"
 	@echo ""
 	@echo "发布:"
-	@echo "  make dry-run           预览 cargo-release 动作（不执行）"
-	@echo "  make release           执行 cargo-release（bump + tag + push）"
+	@echo "  make dry-run           预览 cargo-release 动作（只读，不改文件）"
+	@echo "  make release           生成并提交 CHANGELOG，然后 cargo-release"
 	@echo "  make release-check     检查发布前置条件"
 	@echo "  make dist-plan         预览 cargo-dist 构建计划"
 	@echo "  make dist-build        本地构建所有平台产物到 dist/"
@@ -258,8 +347,10 @@ help:  ## 显示本帮助
 	@echo "    例: make release LEVEL=minor"
 	@echo ""
 	@echo "安装:"
-	@echo "  make install-local     安装到 $(BINDIR)"
-	@echo "  make uninstall-local   卸载"
+	@echo "  make install           安装到 $(PREFIX)（TUI + Shell 后端）"
+	@echo "  make install-system    安装到 $(SYSTEM_PREFIX)（按需 sudo）"
+	@echo "  make uninstall         卸载 $(PREFIX) 中的安装"
+	@echo "  make uninstall-system  卸载 $(SYSTEM_PREFIX) 中的安装"
 	@echo ""
 	@echo "清理:"
 	@echo "  make clean             清空所有产物"

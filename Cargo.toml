@@ -16,13 +16,15 @@ dirs = "5"
 chrono = "0.4"
 
 # ---------- cargo-release ----------
+# 注意：此处**刻意不配置** pre-release-hook。
+# CHANGELOG.md 只在显式执行 `make changelog`（或 `make release` 的显式步骤）时生成，
+# 因此 `make dry-run` / `cargo release --dry-run` 不会产生任何文件写入。
 [workspace.metadata.release]
 shared-version = true
 tag-name = "v{{version}}"
 pre-release-commit-message = "release: {{version}}"
 publish = false
 push-remote = "origin"
-pre-release-hook = ["git", "cliff", "--tag", "v{{version}}", "-o", "CHANGELOG.md"]
 
 # The profile that 'dist' will build with
 [profile.dist]
