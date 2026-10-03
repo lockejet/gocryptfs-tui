@@ -2,7 +2,7 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/)。
 
-## [Unreleased]
+## [0.2.0] - 2026-10-03
 
 ### Features
 - 新增 i18n 国际化支持：简体中文（zh-CN）与 English（en-US）界面文案
@@ -44,7 +44,7 @@
   不再改写 `CHANGELOG.md`；新增 `changelog.d/` 片段机制（`make changelog-preview` 预览、
   `make changelog` 合并片段且片段保留，发布时才归档），手写内容随代码提交可长期保留
 
-### 变更
+### Behavior Changes
 - TAB1 键位语义调整：`m` 只挂载、`u` 只卸载（取消 `m`/`Enter` 的挂载/卸载 toggle）；
   已挂载时按 `m`、未挂载时按 `u` 仅显示灰色信息提示（`Bin`/`Config` 等路径展示不受影响）
 - `Enter` 不再参与 TAB1 的挂载/卸载（仅 TAB2/TAB3 保留进入向导）
