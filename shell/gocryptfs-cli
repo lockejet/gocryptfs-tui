@@ -22,6 +22,21 @@ JSON_MODE=false
 VERBOSE=false
 DRY_RUN=false
 
+# 语言：先按环境/默认配置解析，再预扫描 --lang（位置无关，便于报错也用选定语言）
+i18n_init
+_j=1
+while [ $_j -le $# ]; do
+    _a="${!_j}"
+    case "$_a" in
+        -l|--lang)
+            _j=$((_j+1))
+            [ $_j -le $# ] && { i18n_set_lang "${!_j}" || true; }
+            ;;
+        --lang=*) i18n_set_lang "${_a#--lang=}" || true ;;
+    esac
+    _j=$((_j+1))
+done
+
 # ============================================================
 # 单遍扫描所有参数，识别全局选项（位置无关）
 # ============================================================
@@ -33,10 +48,32 @@ while [ $i -le $# ]; do
         -c|--config)
             i=$((i+1))
             if [ $i -gt $# ]; then
-                echo "错误: -c/--config 需要参数" >&2
+                te cli.error.config_needs_value >&2
                 exit 1
             fi
             CONFIG_FILE="${!i}"
+            ;;
+        -l|--lang)
+            i=$((i+1))
+            if [ $i -gt $# ]; then
+                te cli.error.lang_needs_value >&2
+                exit 1
+            fi
+            if ! i18n_set_lang "${!i}"; then
+                te cli.error.unsupported_lang "${!i}" >&2
+                exit 1
+            fi
+            ;;
+        --lang=*)
+            _langval="${arg#--lang=}"
+            if [ -z "$_langval" ]; then
+                te cli.error.lang_needs_value >&2
+                exit 1
+            fi
+            if ! i18n_set_lang "$_langval"; then
+                te cli.error.unsupported_lang "$_langval" >&2
+                exit 1
+            fi
             ;;
         --json)          JSON_MODE=true ;;
         -v|--verbose)    VERBOSE=true ;;
@@ -51,7 +88,10 @@ while [ $i -le $# ]; do
 done
 set -- "${POSITIONAL[@]}"
 
-export CONFIG_FILE JSON_MODE VERBOSE DRY_RUN
+# 未显式指定 --lang 时，用最终配置路径重新解析（配置里的 language: 生效）
+i18n_init
+
+export CONFIG_FILE JSON_MODE VERBOSE DRY_RUN I18N_LANG
 
 if [ $# -eq 0 ]; then
     show_help
@@ -75,7 +115,7 @@ case "$COMMAND" in
     check-deps) check_deps ;;
     help|--help|-h) show_help ;;
     *)
-        echo "未知命令: $COMMAND" >&2
+        te cli.error.unknown_command "$COMMAND" >&2
         show_help
         exit 1
         ;;

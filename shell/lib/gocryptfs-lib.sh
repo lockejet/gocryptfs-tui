@@ -1,5 +1,6 @@
 #!/bin/bash
 # gocryptfs-lib.sh: gocryptfs-cli 的全部库函数（轮询挂载点版）
+# 面向用户的文案走 lib/i18n.sh 的消息表（t/te），支持 zh-CN / en-US
 #
 # 与 -notifypid 版的区别：
 #   §8.5 gocryptfs_with_password 使用"后台运行 + 轮询挂载点"方案
@@ -12,9 +13,24 @@
 #   4. 进程提前退出 → 取退出码判断（可能是密码错误）
 #   5. 超时 → kill 进程，返回 1
 
-# § 0. 函数索引
+# § 0. i18n（消息表与语言解析在 lib/i18n.sh；缺失时降级为直接输出键名）
+_I18N_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$_I18N_DIR/i18n.sh" ]; then
+    # shellcheck source=/dev/null
+    source "$_I18N_DIR/i18n.sh"
+fi
+if ! declare -F t >/dev/null 2>&1; then
+    I18N_LANG="zh-CN"
+    t()  { printf '%s' "${1:-}"; }
+    te() { printf '%s\n' "${1:-}"; }
+    i18n_init() { :; }
+    i18n_set_lang() { return 1; }
+fi
+
+# § 0.1 函数索引
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
-    echo "gocryptfs-lib.sh — 函数索引（轮询版）"
+    i18n_init
+    te lib.self_index
     exit 0
 fi
 
@@ -27,21 +43,9 @@ EXIT_UMOUNT_FORCE=7; EXIT_CONFIG=8
 
 # § 2. 帮助
 show_help() {
-    cat <<'EOF'
-gocryptfs-cli - gocryptfs-tui 的 Shell 后端
-用法: gocryptfs-cli [-c <config>] <command> [options]
-命令: list / info / ls / tree / mount / umount / create / remove
-      config / edit / check-deps / log / help
-
-log 子命令选项:
-  --limit N        显示最近 N 条（默认 20）
-  --src SRC        过滤来源: cli / tui
-  --action ACTION  过滤操作: mount / umount / create / remove / tui.start / ...
-  --result RESULT  过滤结果: success / failed / started / cancelled
-  --since DATE     起始时间（ISO 8601）
-  --follow         实时跟踪（类似 tail -f）
-  --json           JSON 输出
-EOF
+    i18n_init
+    t cli.help
+    printf '\n'
 }
 
 check_deps() {
@@ -50,10 +54,10 @@ check_deps() {
         command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
     done
     if [ ${#missing[@]} -gt 0 ]; then
-        echo "[!] 缺少依赖: ${missing[*]}" >&2
+        te deps.missing "${missing[*]}" >&2
         return 1
     fi
-    echo "[✔] 依赖齐全" >&2
+    te deps.ok >&2
 }
 
 # § 3. 日志
@@ -104,7 +108,7 @@ emit_error() {
 
 # § 5. 配置
 require_config() {
-    [ -f "$CONFIG_FILE" ] || emit_error $EXIT_CONFIG "配置文件不存在: $CONFIG_FILE"
+    [ -f "$CONFIG_FILE" ] || emit_error $EXIT_CONFIG "$(t error.config_missing "$CONFIG_FILE")"
 }
 get_vault_field() {
     yq -r ".vaults[] | select(.name == \"$1\") | .$2 // \"\"" "$CONFIG_FILE"
@@ -143,27 +147,27 @@ dir_is_empty() { [ -z "$(ls -A "$1" 2>/dev/null)" ]; }
 lock_dir() {
     local mode; mode=$(get_setting "lock_mode" "555")
     [ "$DRY_RUN" = true ] && { log_line "[DRY-RUN] chmod $mode $1"; return 0; }
-    [ -d "$1" ] && chmod "$mode" "$1" && log_line "已锁定 ($mode): $1"
+    [ -d "$1" ] && chmod "$mode" "$1" && log_line "$(t log.dir_locked "$mode" "$1")"
 }
 unlock_dir() {
     local mode; mode=$(get_setting "unlock_mode" "755")
     [ "$DRY_RUN" = true ] && { log_line "[DRY-RUN] chmod $mode $1"; return 0; }
-    [ -d "$1" ] && chmod "$mode" "$1" && log_line "已解锁 ($mode): $1"
+    [ -d "$1" ] && chmod "$mode" "$1" && log_line "$(t log.dir_unlocked "$mode" "$1")"
 }
 
 # § 8. 密码
 read_password_from_stdin() {
     local p; IFS= read -r p || true
-    [ -z "$p" ] && emit_error $EXIT_PASSWORD "密码为空"
+    [ -z "$p" ] && emit_error $EXIT_PASSWORD "$(t error.password_empty)"
     echo "$p"
 }
 read_password_interactive() {
     local p1 p2
     while true; do
-        printf '请输入密码: ' >&2; IFS= read -rs p1; printf '\n' >&2
-        printf '再次输入: ' >&2; IFS= read -rs p2; printf '\n' >&2
-        [ -z "$p1" ] && { echo "密码不能为空" >&2; continue; }
-        [ "$p1" != "$p2" ] && { echo "两次密码不一致" >&2; continue; }
+        t prompt.password >&2; IFS= read -rs p1; printf '\n' >&2
+        t prompt.password_again >&2; IFS= read -rs p2; printf '\n' >&2
+        [ -z "$p1" ] && { te error.password_empty_retry >&2; continue; }
+        [ "$p1" != "$p2" ] && { te error.password_mismatch >&2; continue; }
         break
     done
     echo "$p1"
@@ -178,7 +182,7 @@ gocryptfs_with_password() {
 
     local passfile output_file
     passfile=$(mktemp -t gocryptfs-pass.XXXXXX) || {
-        log_error "无法创建密码临时文件"
+        log_error "$(t error.tmp_password_file)"
         return 1
     }
     chmod 600 "$passfile"
@@ -186,7 +190,7 @@ gocryptfs_with_password() {
 
     output_file=$(mktemp -t gocryptfs-out.XXXXXX) || {
         rm -f "$passfile"
-        log_error "无法创建输出临时文件"
+        log_error "$(t error.tmp_output_file)"
         return 1
     }
 
@@ -228,7 +232,7 @@ gocryptfs_with_password() {
             kill "$gpid" 2>/dev/null || true
             wait "$gpid" 2>/dev/null || true
             rc=1
-            GOCRYPTFS_LAST_OUTPUT="挂载超时（30 秒内挂载点未出现）"
+            GOCRYPTFS_LAST_OUTPUT="$(t error.mount_timeout)"
         fi
     fi
 
@@ -250,7 +254,7 @@ gocryptfs_output_is_password_error() {
 # § 9. 容量
 check_space() {
     local src="$1" tdir="$2"
-    [ -e "$src" ] || { log_error "源不存在: $src"; return 1; }
+    [ -e "$src" ] || { log_error "$(t error.source_missing "$src")"; return 1; }
     if [ ! -e "$tdir" ]; then
         local p="$tdir"
         while [ ! -e "$p" ] && [ "$p" != "/" ]; do p="$(dirname "$p")"; done
@@ -260,7 +264,7 @@ check_space() {
     ssz=$(du -sb "$src" 2>/dev/null | awk '{print $1}')
     tfree=$(df -B1 --output=avail "$tdir" 2>/dev/null | tail -1 | tr -d ' ')
     if [ -z "$ssz" ] || [ -z "$tfree" ]; then
-        log_error "无法计算容量"
+        log_error "$(t error.capacity_failed)"
         return 1
     fi
     req=$(( ssz * 111 / 100 ))
@@ -274,7 +278,7 @@ check_space() {
 # § 10. 锁
 acquire_lock() {
     exec 200>"$LOCK_FILE"
-    flock -n 200 || emit_error $EXIT_CONFIG "另一个进程正在运行"
+    flock -n 200 || emit_error $EXIT_CONFIG "$(t error.already_running)"
 }
 
 # § 11. 确认
@@ -322,7 +326,7 @@ _list_table() {
     local count
     count=$(yq -r '.vaults // [] | length' "$CONFIG_FILE" 2>/dev/null || echo 0)
     if [ "$count" -eq 0 ]; then
-        echo "(配置中没有任何卷)"
+        te error.list_empty
         return 0
     fi
     printf '%-20s %-12s %-10s %s\n' "NAME" "STATUS" "LOCKED" "MOUNT"
@@ -351,8 +355,8 @@ _list_table() {
 cmd_info() {
     require_config
     local name="$1"
-    [ -z "$name" ] && emit_error $EXIT_ERROR "用法: info <name>"
-    vault_exists "$name" || emit_error $EXIT_ERROR "卷不存在: $name"
+    [ -z "$name" ] && emit_error $EXIT_ERROR "$(t usage.info)"
+    vault_exists "$name" || emit_error $EXIT_ERROR "$(t error.vault_missing "$name")"
     local id path mp mounted=false locked=false valid=false mode="-"
     id=$(get_vault_field "$name" "id")
     path=$(get_vault_field "$name" "path")
@@ -371,10 +375,10 @@ cmd_info() {
             '{status:"ok",data:{id:$id,name:$name,path:$path,mount_point:$mp,mounted:$mounted,locked:$locked,mode:$mode,valid:$valid}}'
         printf '@@DONE@@ info\n' >&2
     else
-        echo "ID: $id"; echo "名称: $name"
-        echo "加密路径: $path"; echo "挂载点: $mp"
-        echo "已挂载: $mounted"; echo "已锁定: $locked"
-        echo "权限: $mode"; echo "有效: $valid"
+        te info.id "$id"; te info.name "$name"
+        te info.cipher_path "$path"; te info.mount_point "$mp"
+        te info.mounted "$mounted"; te info.locked "$locked"
+        te info.mode "$mode"; te info.valid "$valid"
     fi
 }
 
@@ -382,10 +386,10 @@ cmd_info() {
 cmd_ls() {
     require_config
     local name="$1"
-    [ -z "$name" ] && emit_error $EXIT_ERROR "用法: ls <name>"
-    vault_exists "$name" || emit_error $EXIT_ERROR "卷不存在: $name"
+    [ -z "$name" ] && emit_error $EXIT_ERROR "$(t usage.ls)"
+    vault_exists "$name" || emit_error $EXIT_ERROR "$(t error.vault_missing "$name")"
     local mp; mp=$(get_vault_field "$name" "mount_point")
-    is_mounted "$mp" || emit_error $EXIT_STATE "卷未挂载: $name"
+    is_mounted "$mp" || emit_error $EXIT_STATE "$(t error.not_mounted "$name")"
     if [ "$JSON_MODE" = true ]; then
         local lines="[]"
         while IFS= read -r l; do
@@ -401,11 +405,11 @@ cmd_ls() {
 cmd_tree() {
     require_config
     local name="$1"
-    [ -z "$name" ] && emit_error $EXIT_ERROR "用法: tree <name>"
-    vault_exists "$name" || emit_error $EXIT_ERROR "卷不存在: $name"
+    [ -z "$name" ] && emit_error $EXIT_ERROR "$(t usage.tree)"
+    vault_exists "$name" || emit_error $EXIT_ERROR "$(t error.vault_missing "$name")"
     local mp; mp=$(get_vault_field "$name" "mount_point")
-    is_mounted "$mp" || emit_error $EXIT_STATE "卷未挂载: $name"
-    command -v tree >/dev/null 2>&1 || emit_error $EXIT_ERROR "tree 未安装"
+    is_mounted "$mp" || emit_error $EXIT_STATE "$(t error.not_mounted "$name")"
+    command -v tree >/dev/null 2>&1 || emit_error $EXIT_ERROR "$(t error.tree_missing)"
     if [ "$JSON_MODE" = true ]; then
         local lines="[]"
         while IFS= read -r l; do
@@ -423,24 +427,24 @@ cmd_tree() {
 cmd_mount() {
     require_config
     local name="$1"
-    [ -z "$name" ] && emit_error $EXIT_ERROR "用法: mount <name>"
-    vault_exists "$name" || emit_error $EXIT_ERROR "卷不存在: $name"
+    [ -z "$name" ] && emit_error $EXIT_ERROR "$(t usage.mount)"
+    vault_exists "$name" || emit_error $EXIT_ERROR "$(t error.vault_missing "$name")"
 
     local path mp
     path=$(get_vault_field "$name" "path")
     mp=$(get_vault_field "$name" "mount_point")
 
-    is_mounted "$mp" && emit_error $EXIT_STATE "卷已挂载: $name"
-    [ -d "$path" ] || emit_error $EXIT_ERROR "加密目录不存在: $path"
+    is_mounted "$mp" && emit_error $EXIT_STATE "$(t error.already_mounted "$name")"
+    [ -d "$path" ] || emit_error $EXIT_ERROR "$(t error.cipher_dir_missing "$path")"
     [ -f "$path/gocryptfs.conf" ] || \
-        emit_error $EXIT_ERROR "不是有效的 gocryptfs 加密卷（缺少 gocryptfs.conf）: $name"
+        emit_error $EXIT_ERROR "$(t error.invalid_vault "$name")"
 
-    [ ! -d "$mp" ] && { log_line "创建挂载点: $mp"; [ "$DRY_RUN" = false ] && mkdir -p "$mp"; }
+    [ ! -d "$mp" ] && { log_line "$(t log.mountpoint_created "$mp")"; [ "$DRY_RUN" = false ] && mkdir -p "$mp"; }
 
     local allow_nonempty
     allow_nonempty=$(get_effective_setting "$name" "gocryptfs.nonempty" "false")
     if [ -n "$(ls -A "$mp" 2>/dev/null)" ] && [ "$allow_nonempty" != "true" ]; then
-        emit_error $EXIT_MOUNTPOINT "挂载点非空: $mp（需设置 nonempty: true）"
+        emit_error $EXIT_MOUNTPOINT "$(t error.mountpoint_not_empty "$mp")"
     fi
 
     local password
@@ -464,26 +468,26 @@ cmd_mount() {
     fi
 
     unlock_dir "$mp"
-    log_line "执行: gocryptfs ${opts[*]} $path $mp"
+    log_line "$(t log.exec "gocryptfs ${opts[*]} $path $mp")"
 
     if ! gocryptfs_with_password "$password" "${opts[@]}" "$path" "$mp"; then
         lock_dir "$mp"
         log_event "mount" "$name" "failed"
         if gocryptfs_output_is_password_error; then
-            emit_error $EXIT_PASSWORD "密码错误"
+            emit_error $EXIT_PASSWORD "$(t error.wrong_password)"
         else
-            emit_error $EXIT_ERROR "挂载失败: $name"
+            emit_error $EXIT_ERROR "$(t error.mount_failed "$name")"
         fi
     fi
 
     if ! is_mounted "$mp"; then
         lock_dir "$mp"
         log_event "mount" "$name" "failed"
-        emit_error $EXIT_ERROR "挂载失败: $name（gocryptfs 未成功挂载）"
+        emit_error $EXIT_ERROR "$(t error.mount_failed_notmounted "$name")"
     fi
 
     log_event "mount" "$name" "success"
-    emit_done "已挂载: $name"
+    emit_done "$(t done.mounted "$name")"
 }
 
 # § 15. umount
@@ -493,15 +497,15 @@ cmd_umount() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --force) force=true; shift ;;
-            -*) emit_error $EXIT_ERROR "未知选项: $1" ;;
+            -*) emit_error $EXIT_ERROR "$(t error.unknown_option "$1")" ;;
             *) name="$1"; shift ;;
         esac
     done
-    [ -z "$name" ] && emit_error $EXIT_ERROR "用法: umount <name> [--force]"
-    vault_exists "$name" || emit_error $EXIT_ERROR "卷不存在: $name"
+    [ -z "$name" ] && emit_error $EXIT_ERROR "$(t usage.umount)"
+    vault_exists "$name" || emit_error $EXIT_ERROR "$(t error.vault_missing "$name")"
 
     local mp; mp=$(get_vault_field "$name" "mount_point")
-    is_mounted "$mp" || emit_error $EXIT_STATE "卷未挂载: $name"
+    is_mounted "$mp" || emit_error $EXIT_STATE "$(t error.not_mounted "$name")"
 
     if [ "$DRY_RUN" = true ]; then
         log_line "[DRY-RUN] fusermount -u $mp"
@@ -509,25 +513,25 @@ cmd_umount() {
         return 0
     fi
 
-    log_line "执行: fusermount -u $mp"
+    log_line "$(t log.exec "fusermount -u $mp")"
     local rc=0
     fusermount -u "$mp" 2>&1 || rc=$?
 
     if [ "$rc" -ne 0 ]; then
         if [ "$force" = true ]; then
             fusermount -u -z "$mp" 2>&1 || {
-                log_event "umount" "$name" "failed" "强制卸载也失败"
-                emit_error $EXIT_UMOUNT_FORCE "强制卸载失败: $name"
+                log_event "umount" "$name" "failed" "$(t log.force_umount_failed)"
+                emit_error $EXIT_UMOUNT_FORCE "$(t error.force_umount_failed "$name")"
             }
         else
             log_event "umount" "$name" "failed"
-            emit_error $EXIT_UMOUNT "卸载失败: $name（可尝试 --force）"
+            emit_error $EXIT_UMOUNT "$(t error.umount_failed "$name")"
         fi
     fi
 
     lock_dir "$mp"
     log_event "umount" "$name" "success"
-    emit_done "已卸载: $name"
+    emit_done "$(t done.umounted "$name")"
 }
 
 # § 16. create
@@ -542,20 +546,20 @@ cmd_create() {
             --keep-source)    keep_source=true; shift ;;
             --no-keep-source) keep_source=false; shift ;;
             --yes|-y)         yes=true; shift ;;
-            -*) emit_error $EXIT_ERROR "未知选项: $1" ;;
-            *) [ -z "$src" ] && src="$1" || emit_error $EXIT_ERROR "多余参数: $1"; shift ;;
+            -*) emit_error $EXIT_ERROR "$(t error.unknown_option "$1")" ;;
+            *) [ -z "$src" ] && src="$1" || emit_error $EXIT_ERROR "$(t error.extra_arg "$1")"; shift ;;
         esac
     done
 
-    [ -z "$src" ]  && emit_error $EXIT_ERROR "缺少源目录"
-    [ -z "$name" ] && emit_error $EXIT_ERROR "缺少 --name"
-    [ -d "$src" ]  || emit_error $EXIT_ERROR "源目录不存在: $src"
+    [ -z "$src" ]  && emit_error $EXIT_ERROR "$(t error.source_dir_missing)"
+    [ -z "$name" ] && emit_error $EXIT_ERROR "$(t error.name_missing)"
+    [ -d "$src" ]  || emit_error $EXIT_ERROR "$(t error.source_dir_not_exist "$src")"
     src="${src%/}"
 
     local existing
     existing=$(yq -r ".vaults[] | select(.mount_point == \"$src\") | .name" "$CONFIG_FILE" 2>/dev/null | head -1)
     if [ -n "$existing" ]; then
-        emit_error $EXIT_STATE "源目录 $src 已绑定卷「$existing」，请先删除或使用其他源目录"
+        emit_error $EXIT_STATE "$(t error.source_in_use "$src" "$existing")"
     fi
 
     [ -z "$cipher" ] && cipher="$(dirname "$src")/.cipher.d/$name"
@@ -574,7 +578,7 @@ cmd_create() {
 
     if [ "$is_resume" = false ]; then
         check_space "$src" "$(dirname "$cipher")"
-        [ $? -eq 5 ] && emit_error $EXIT_NOSPACE "磁盘空间不足"
+        [ $? -eq 5 ] && emit_error $EXIT_NOSPACE "$(t error.no_space)"
     fi
 
     local password
@@ -592,62 +596,62 @@ cmd_create() {
     fi
 
     if [ "$is_resume" = false ]; then
-        log_line "创建加密后端: $cipher"
-        mkdir -p "$cipher" || emit_error $EXIT_ERROR "无法创建 $cipher"
+        log_line "$(t log.create_cipher "$cipher")"
+        mkdir -p "$cipher" || emit_error $EXIT_ERROR "$(t error.cannot_create_dir "$cipher")"
         if ! gocryptfs_with_password "$password" -init "$cipher"; then
             rmdir "$cipher" 2>/dev/null || true
-            emit_error $EXIT_ERROR "gocryptfs -init 失败"
+            emit_error $EXIT_ERROR "$(t error.init_failed)"
         fi
     fi
 
     mkdir -p "$tmp_mount"
     is_mounted "$tmp_mount" && fusermount -u "$tmp_mount" 2>/dev/null || true
 
-    log_line "挂载到临时点: $tmp_mount"
+    log_line "$(t log.mount_tmp "$tmp_mount")"
     if ! gocryptfs_with_password "$password" "$cipher" "$tmp_mount"; then
         if gocryptfs_output_is_password_error; then
-            emit_error $EXIT_PASSWORD "密码错误"
+            emit_error $EXIT_PASSWORD "$(t error.wrong_password)"
         else
-            emit_error $EXIT_ERROR "临时挂载失败"
+            emit_error $EXIT_ERROR "$(t error.tmp_mount_failed)"
         fi
     fi
 
-    log_line "开始迁移: $src → $tmp_mount"
+    log_line "$(t log.migrate_start "$src" "$tmp_mount")"
     local rsync_opts=("-a" "-h")
     [ "$keep_source" = "true" ] || rsync_opts+=("--remove-source-files")
 
     if ! rsync "${rsync_opts[@]}" "$src/" "$tmp_mount/" 2>&1; then
         fusermount -u "$tmp_mount" 2>/dev/null || true
-        log_event "create" "$name" "failed" "rsync 迁移失败"
-        emit_error $EXIT_ERROR "rsync 迁移失败"
+        log_event "create" "$name" "failed" "$(t error.rsync_failed)"
+        emit_error $EXIT_ERROR "$(t error.rsync_failed)"
     fi
 
     [ "$keep_source" = "false" ] && find "$src" -mindepth 1 -type d -empty -delete 2>/dev/null || true
 
     if [ "$yes" = false ] && [ "$JSON_MODE" != true ] && [ -t 0 ]; then
-        confirm "确认替换挂载点 $src ？" "n" || {
+        confirm "$(t confirm.replace_mountpoint "$src")" "n" || {
             fusermount -u "$tmp_mount" 2>/dev/null || true
-            emit_error $EXIT_STATE "用户取消"
+            emit_error $EXIT_STATE "$(t error.user_abort)"
         }
     fi
 
-    fusermount -u "$tmp_mount" || emit_error $EXIT_UMOUNT "卸载临时点失败"
+    fusermount -u "$tmp_mount" || emit_error $EXIT_UMOUNT "$(t error.umount_tmp_failed)"
     rmdir "$tmp_mount" 2>/dev/null || true
 
     if [ -d "$src" ]; then
         if [ -n "$(ls -A "$src" 2>/dev/null)" ]; then
-            mv "$src" "${src}.plain" || emit_error $EXIT_ERROR "移动源目录失败"
+            mv "$src" "${src}.plain" || emit_error $EXIT_ERROR "$(t error.move_source_failed)"
         else
             rmdir "$src" 2>/dev/null || true
         fi
     fi
     mkdir -p "$src"
 
-    log_line "正式挂载: $cipher → $src"
+    log_line "$(t log.mount_final "$cipher" "$src")"
     local aoo=""
     [ "$(get_setting "gocryptfs.allow_other" "false")" = "true" ] && aoo="-allow_other"
     if ! gocryptfs_with_password "$password" $aoo "$cipher" "$src"; then
-        emit_error $EXIT_ERROR "最终挂载失败"
+        emit_error $EXIT_ERROR "$(t error.final_mount_failed)"
     fi
 
     local new_id
@@ -657,7 +661,7 @@ cmd_create() {
     yq -i ".pending = [(.pending // [])[] | select(.source_dir != \"$src\")]" "$CONFIG_FILE" 2>/dev/null || true
 
     log_event "create" "$name" "success"
-    emit_done "创建完成: $name"
+    emit_done "$(t done.created "$name")"
 }
 
 # § 17. remove
@@ -673,12 +677,12 @@ cmd_remove() {
             --keep-cipher)   keep_cipher=true; shift ;;
             --target)        target="$2"; shift 2 ;;
             --yes|-y)        yes=true; shift ;;
-            -*) emit_error $EXIT_ERROR "未知选项: $1" ;;
+            -*) emit_error $EXIT_ERROR "$(t error.unknown_option "$1")" ;;
             *) name="$1"; shift ;;
         esac
     done
-    [ -z "$name" ] && emit_error $EXIT_ERROR "用法: remove <name> [options]"
-    vault_exists "$name" || emit_error $EXIT_ERROR "卷不存在: $name"
+    [ -z "$name" ] && emit_error $EXIT_ERROR "$(t usage.remove)"
+    vault_exists "$name" || emit_error $EXIT_ERROR "$(t error.vault_missing "$name")"
 
     local path mp
     path=$(get_vault_field "$name" "path")
@@ -713,12 +717,12 @@ cmd_remove() {
     fi
 
     if [ "$yes" = false ] && [ -t 0 ]; then
-        printf '警告：将删除加密卷并还原明文。\n' >&2
-        printf '请输入 DELETE 确认: ' >&2
+        te prompt.delete_warning >&2
+        t prompt.delete_confirm >&2
         local confirm_text
         read -r confirm_text
         if [ "$confirm_text" != "DELETE" ]; then
-            emit_error $EXIT_STATE "用户取消"
+            emit_error $EXIT_STATE "$(t error.user_abort)"
         fi
     fi
 
@@ -730,22 +734,22 @@ cmd_remove() {
     if [ "$DRY_RUN" = true ]; then
         log_line "[DRY-RUN] rsync $mp/ → $target_path/"
         log_line "[DRY-RUN] fusermount -u $mp"
-        [ "$delete_cipher" = true ] && log_line "[DRY-RUN] rm -rf $path" || log_line "[DRY-RUN] 保留 $path"
+        [ "$delete_cipher" = true ] && log_line "[DRY-RUN] rm -rf $path" || log_line "$(t log.dry_run_keep "$path")"
         printf '@@DONE@@ remove (dry-run)\n' >&2
         return 0
     fi
 
     if ! is_mounted "$mp"; then
-        log_line "自动挂载: $path → $mp"
+        log_line "$(t log.auto_mount "$path" "$mp")"
         [ ! -d "$mp" ] && mkdir -p "$mp"
         unlock_dir "$mp"
         local aoo=""
         [ "$(get_setting "gocryptfs.allow_other" "false")" = "true" ] && aoo="-allow_other"
         if ! gocryptfs_with_password "$password" $aoo "$path" "$mp"; then
             if gocryptfs_output_is_password_error; then
-                emit_error $EXIT_PASSWORD "密码错误"
+                emit_error $EXIT_PASSWORD "$(t error.wrong_password)"
             else
-                emit_error $EXIT_PASSWORD "自动挂载失败"
+                emit_error $EXIT_PASSWORD "$(t error.auto_mount_failed)"
             fi
         fi
     fi
@@ -754,17 +758,17 @@ cmd_remove() {
         local migrate_to
         [ "$target_mode" = "in_place" ] && migrate_to="${mp}.restore_tmp" || migrate_to="$target_path"
         mkdir -p "$migrate_to"
-        log_line "迁移: $mp/ → $migrate_to/"
+        log_line "$(t log.migrate "$mp/" "$migrate_to/")"
         if ! rsync -a -h "$mp/" "$migrate_to/" 2>&1; then
             fusermount -u "$mp" 2>/dev/null || true
             lock_dir "$mp"
-            log_event "remove" "$name" "failed" "rsync 迁移失败"
-            emit_error $EXIT_ERROR "rsync 迁移失败"
+            log_event "remove" "$name" "failed" "$(t error.rsync_failed)"
+            emit_error $EXIT_ERROR "$(t error.rsync_failed)"
         fi
     fi
 
-    log_line "卸载: $mp"
-    fusermount -u "$mp" 2>&1 || fusermount -u -z "$mp" 2>&1 || emit_error $EXIT_UMOUNT_FORCE "卸载失败"
+    log_line "$(t log.umount "$mp")"
+    fusermount -u "$mp" 2>&1 || fusermount -u -z "$mp" 2>&1 || emit_error $EXIT_UMOUNT_FORCE "$(t error.umount_failed_plain)"
 
     if [ "$restore" = true ] && [ "$target_mode" = "in_place" ]; then
         [ -d "$mp" ] && find "$mp" -mindepth 1 -delete 2>/dev/null || true
@@ -775,16 +779,16 @@ cmd_remove() {
     fi
 
     if [ "$delete_cipher" = true ]; then
-        log_line "删除加密后端: $path"
-        rm -rf "$path" || emit_error $EXIT_ERROR "删除 $path 失败"
+        log_line "$(t log.delete_cipher "$path")"
+        rm -rf "$path" || emit_error $EXIT_ERROR "$(t error.delete_failed "$path")"
     else
-        log_line "保留加密后端: $path"
+        log_line "$(t log.keep_cipher "$path")"
     fi
 
     yq -i "del(.vaults[] | select(.name == \"$name\"))" "$CONFIG_FILE"
 
     log_event "remove" "$name" "success"
-    emit_done "删除完成: $name"
+    emit_done "$(t done.removed "$name")"
 }
 
 # § 18. log
@@ -799,13 +803,13 @@ cmd_log() {
             --result) result="$2"; shift 2 ;;
             --since)  since="$2"; shift 2 ;;
             --follow) follow=true; shift ;;
-            -*) emit_error $EXIT_ERROR "未知选项: $1" ;;
+            -*) emit_error $EXIT_ERROR "$(t error.unknown_option "$1")" ;;
             *) shift ;;
         esac
     done
 
     if [ ! -f "$LOG_FILE" ]; then
-        echo "（暂无日志: $LOG_FILE）"
+        te log.none "$LOG_FILE"
         return 0
     fi
 
@@ -816,13 +820,14 @@ cmd_log() {
     [ -n "$result" ] && filter="$filter | select(.result == \"$result\")"
     [ -n "$since" ]  && filter="$filter | select(.ts >= \"$since\")"
 
+    # 只喂 JSON 行给 jq：历史日志里可能混有旧版本写入的纯文本行
     if [ "$follow" = true ]; then
-        tail -f "$LOG_FILE" | jq -c --unbuffered "$filter"
+        tail -f "$LOG_FILE" | grep --line-buffered '^{' | jq -c --unbuffered "$filter"
         return 0
     fi
 
     if [ "$JSON_MODE" = true ]; then
-        tail -n "$limit" "$LOG_FILE" | jq -c "$filter"
+        grep '^{' "$LOG_FILE" | tail -n "$limit" | jq -c "$filter"
         return 0
     fi
 
@@ -836,7 +841,7 @@ cmd_log() {
         reset=$(tput sgr0 2>/dev/null || echo "")
     fi
 
-    tail -n "$limit" "$LOG_FILE" \
+    grep '^{' "$LOG_FILE" | tail -n "$limit" \
         | jq -r "$filter | [.ts // \"\", .src // \"\", .action // \"\", .target // \"\", .result // \"\", .detail // \"\"] | @tsv" \
         | while IFS=$'\t' read -r ts src action target result detail; do
             local t
