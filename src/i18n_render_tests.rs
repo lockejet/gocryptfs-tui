@@ -649,7 +649,9 @@ fn top_bar_shows_bin_cli_config_and_data() {
     let _guard = lock_lang();
     let mut app = test_app();
     app.config = "/home/user/.config/gocryptfs-tui/config.local.yaml".to_string();
-    let lines = render_lines(&mut app);
+    // 用足够宽的终端：开发构建的版本串形如 `v0.2.0-1-g<sha>-dirty`，
+    // 140 列时两条路径会按比例截断，无法断言"完整路径"（截断行为见下一个用例）。
+    let lines = render_lines_at(&mut app, 240, 24);
 
     // 第 1 行：Bin 与 CLI 的完整路径
     assert!(
@@ -976,4 +978,87 @@ fn dim_hint_clears_on_next_key() {
 
     handle_key(&mut app, KeyCode::Char('j'), KeyModifiers::empty());
     assert!(!app.status_dim, "下一次按键后应恢复普通样式");
+}
+
+/// 发行包（cargo-dist）不含 Shell 后端：TUI 二进制必须自带并在运行前释放它，
+/// 否则 GitHub 安装后一启动就是 "执行 CLI 失败"。
+#[test]
+fn embedded_backend_is_materialized_and_runnable() {
+    let dir = std::env::temp_dir().join(format!("gocryptfs-tui-backend-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let cli = backend::install_to(&dir).expect("释放内嵌后端失败");
+    assert!(cli.is_file(), "缺少 gocryptfs-cli: {}", cli.display());
+    assert!(
+        dir.join("lib/gocryptfs-lib.sh").is_file(),
+        "缺少 lib/gocryptfs-lib.sh"
+    );
+    assert!(dir.join("lib/i18n.sh").is_file(), "缺少 lib/i18n.sh");
+    assert_eq!(
+        std::fs::read_to_string(&cli).unwrap(),
+        backend::CLI_SCRIPT,
+        "释放出来的后端与二进制内嵌内容不一致"
+    );
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&cli).unwrap().permissions().mode();
+        assert_eq!(
+            mode & 0o111,
+            0o111,
+            "gocryptfs-cli 缺少可执行位: {:o}",
+            mode
+        );
+
+        // 幂等：内容一致时不重写（重写会换 inode）
+        let ino = std::fs::metadata(&cli).unwrap().ino();
+        backend::install_to(&dir).expect("二次释放失败");
+        assert_eq!(
+            std::fs::metadata(&cli).unwrap().ino(),
+            ino,
+            "内容未变化时不应重写后端文件"
+        );
+    }
+
+    // 释放出来的目录布局能独立运行：lib 就近解析成功 → 打印用法
+    let out = std::process::Command::new("bash")
+        .arg(&cli)
+        .arg("--help")
+        .output()
+        .expect("执行内嵌后端失败");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.status.success(), "内嵌后端 --help 失败: {text}");
+    assert!(text.contains("Usage:"), "内嵌后端输出异常: {text}");
+
+    // 自愈：文件被破坏／旧版本残留时，重新释放会覆盖回去
+    std::fs::write(&cli, "#!/bin/bash\nexit 0\n").unwrap();
+    backend::install_to(&dir).expect("自愈失败");
+    assert_eq!(
+        std::fs::read_to_string(&cli).unwrap(),
+        backend::CLI_SCRIPT,
+        "被篡改的后端未被重新释放覆盖"
+    );
+}
+
+/// 后端路径优先级：`GOCRYPTFS_CLI` > 内嵌释放副本 > PATH 中的 `gocryptfs-cli`。
+#[test]
+fn cli_path_precedence() {
+    assert_eq!(
+        cli_path_from(Some("/custom/cli"), Some("/embedded/cli")),
+        "/custom/cli"
+    );
+    assert_eq!(
+        cli_path_from(Some("   "), Some("/embedded/cli")),
+        "/embedded/cli",
+        "空白环境变量应视为未设置"
+    );
+    assert_eq!(cli_path_from(None, Some("/embedded/cli")), "/embedded/cli");
+    assert_eq!(cli_path_from(Some("/custom/cli"), None), "/custom/cli");
+    assert_eq!(cli_path_from(None, None), CLI_NAME);
 }

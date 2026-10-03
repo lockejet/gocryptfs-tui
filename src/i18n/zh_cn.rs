@@ -152,6 +152,8 @@ pub static ENTRIES: &[(&str, &str)] = &[
     ("list.pending_title", " 待处理目录 "),
     ("list.title", " 卷列表 "),
     ("list.title_cipher", " 加密卷列表 "),
+    ("output.backend_extract_failed", "警告: 无法释放内嵌 Shell 后端到 {}（{}）；将改用 PATH 中的 gocryptfs-cli"),
+
     ("output.cli_lang_unsupported", "警告: 当前 gocryptfs-cli 不支持 --lang（可能是旧版已安装后端），输出区文案可能与界面语言不一致"),
     ("output.config", "配置: {}"),
     ("output.exec", "执行: {} {}"),

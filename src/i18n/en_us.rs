@@ -152,6 +152,8 @@ pub static ENTRIES: &[(&str, &str)] = &[
     ("list.pending_title", " Pending directories "),
     ("list.title", " Vault list "),
     ("list.title_cipher", " Encrypted vault list "),
+    ("output.backend_extract_failed", "Warning: failed to extract the bundled shell backend to {} ({}); falling back to gocryptfs-cli from PATH"),
+
     ("output.cli_lang_unsupported", "Warning: this gocryptfs-cli does not support --lang (likely an outdated install); its output may not match the UI language"),
     ("output.config", "Config: {}"),
     ("output.exec", "Exec: {} {}"),

@@ -2,6 +2,7 @@
 
 #[macro_use]
 mod i18n;
+mod backend;
 mod cli;
 mod logger;
 
@@ -168,8 +169,23 @@ impl HistoryFilter {
 // CLI 交互
 // ============================================================
 
+/// 后端路径优先级：`GOCRYPTFS_CLI` > 内嵌释放副本 > PATH 中的 `gocryptfs-cli`。
+fn cli_path_from(env: Option<&str>, embedded: Option<&str>) -> String {
+    if let Some(v) = env {
+        if !v.trim().is_empty() {
+            return v.to_string();
+        }
+    }
+    match embedded {
+        Some(p) => p.to_string(),
+        None => CLI_NAME.to_string(),
+    }
+}
+
 fn cli_path() -> String {
-    std::env::var("GOCRYPTFS_CLI").unwrap_or_else(|_| CLI_NAME.to_string())
+    let env = std::env::var("GOCRYPTFS_CLI").ok();
+    let embedded = backend::embedded_path().map(|p| p.to_string_lossy().to_string());
+    cli_path_from(env.as_deref(), embedded.as_deref())
 }
 
 /// CLI 的实际路径：便于发现「调用到了旧的已安装后端」这类问题
@@ -193,7 +209,7 @@ fn resolved_cli_path() -> String {
 /// 探测 CLI 是否支持 `--lang`（新版 Shell 后端支持；旧版安装不认识，
 /// 会导致英文界面下输出区仍是中文）。探测失败时返回 true，避免误报。
 fn cli_supports_lang(cli: &str) -> bool {
-    match Command::new(cli).arg("--help").output() {
+    match backend::cli_command(cli).arg("--help").output() {
         Ok(out) => {
             let mut text = String::from_utf8_lossy(&out.stdout).to_string();
             text.push_str(&String::from_utf8_lossy(&out.stderr));
@@ -252,7 +268,10 @@ fn resolve_config(cli_opt: Option<PathBuf>) -> String {
 
 /// 问 Shell 后端要配置路径（`gocryptfs-cli config`），失败返回 None。
 fn backend_config_path() -> Option<String> {
-    let o = Command::new(cli_path()).arg("config").output().ok()?;
+    let o = backend::cli_command(&cli_path())
+        .arg("config")
+        .output()
+        .ok()?;
     if !o.status.success() {
         return None;
     }
@@ -281,7 +300,7 @@ fn load_vaults(config: &str) -> Result<Vec<Vault>, String> {
     if config.is_empty() {
         return Err(t!("cli.error.config_empty").to_string());
     }
-    let out = Command::new(cli_path())
+    let out = backend::cli_command(&cli_path())
         .args(["-c", config, "list", "--json"])
         .output()
         .map_err(|e| t!("cli.error.exec_failed", e))?;
@@ -424,7 +443,7 @@ fn spawn_cli_task_with(
     let log = log_file.to_path_buf();
     let hist = history_file.to_path_buf();
     thread::spawn(move || {
-        let mut cmd = Command::new(&cli);
+        let mut cmd = backend::cli_command(&cli);
         cmd.args(&args)
             .env("GOCRYPTFS_LANG", lang)
             .env("LOG_FILE", &log)
@@ -775,6 +794,14 @@ impl App {
         app.add_output(t!("output.started", APP_NAME, short_version()));
         // 打印解析后的实际路径：便于发现调用到了旧的已安装后端
         app.add_output(format!("{}{}", t!("common.cli"), resolved_cli_path()));
+        // 内嵌后端释放失败：给出可操作提示（此时会回退到 PATH 中的后端）
+        if let Some(err) = backend::error() {
+            app.add_output(t!(
+                "output.backend_extract_failed",
+                backend::extract_dir(&app.data_dir).display().to_string(),
+                err
+            ));
+        }
         // 英文界面 + 旧版后端（不认识 --lang）时提示一次，否则输出区会残留中文
         if i18n::lang() != i18n::DEFAULT_LANG && !cli_supports_lang(&cli_path()) {
             app.add_output(t!("output.cli_lang_unsupported").to_string());
@@ -3804,7 +3831,8 @@ fn run_app<B: Backend>(
 // ---------- 打印帮助 ----------
 
 fn print_help(app_config: &str, data_dir: &Path, log_file: &Path, history_file: &Path) {
-    let cli_env = std::env::var("GOCRYPTFS_CLI").unwrap_or_else(|_| CLI_NAME.to_string());
+    // 显示"实际会用的后端"：GOCRYPTFS_CLI > 内嵌释放副本 > PATH 中的 gocryptfs-cli
+    let cli_env = cli_path();
     let editor = std::env::var("EDITOR").unwrap_or_else(|_| "nano".to_string());
     let current = |v: String| t!("clihelp.current", v);
 
@@ -3861,8 +3889,19 @@ fn resolve_lang(cli_lang: Option<&str>, config: &str) -> i18n::Lang {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let outcome = cli::parse(std::env::args().collect());
 
-    let config = resolve_config(outcome.opts.config.clone());
     let data_dir = resolve_data_dir(outcome.opts.data_dir.clone());
+
+    // 发行包不含 Shell 后端：运行 TUI 前先把内嵌副本释放到数据目录
+    // （--help/--version 不写盘，只探测已释放的副本，保持只读）
+    if matches!(outcome.action, cli::Action::Run) {
+        if let Err(e) = backend::install_embedded(&data_dir) {
+            backend::set_error(e);
+        }
+    } else {
+        backend::peek_embedded(&data_dir);
+    }
+
+    let config = resolve_config(outcome.opts.config.clone());
     let log_file = data_dir.join("app.log.jsonl");
     let history_file = data_dir.join("history.jsonl");
     let help_file = data_dir.join("HELP.md");

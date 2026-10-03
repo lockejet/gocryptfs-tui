@@ -91,6 +91,14 @@ curl --proto '=https' --tlsv1.2 -LsSf \
 4. 解压到 `~/.cargo/bin` 或 `~/.local/bin`
 5. 提示 PATH 配置
 
+> **Shell 后端已内嵌在 TUI 二进制里**：首次运行 TUI 时会把 `gocryptfs-cli` 与
+> `lib/*.sh` 释放到 `~/.local/share/gocryptfs-tui/backend/`，因此**无需再单独安装 CLI**
+> （发行包只包含 `gocryptfs-tui` 一个可执行文件）。后端内容变化时（升级）会自动重写；
+> 设 `GOCRYPTFS_CLI=/path/to/gocryptfs-cli` 可改用自定义后端。
+>
+> 运行时仍需系统提供：`gocryptfs`、`fusermount`、`rsync`、`yq`（**mikefarah Go 版 v4**）、
+> `jq`、`mountpoint`（树状视图另需 `tree`）。缺失时后端会明确报出缺哪个命令。
+
 ### 方式二：手动下载
 
 从 [Releases 页面](https://github.com/lockejet/gocryptfs-tui/releases) 下载对应平台的包：
@@ -134,6 +142,12 @@ make install-system    # 安装到 /usr/local（内部按需 sudo，请勿直接
 
 TUI 与 Shell 后端（`gocryptfs-cli` + `lib/*.sh`）必须**成套更新**，
 否则 TUI 可能调用到 `/usr/local/bin` 下的旧后端，出现「界面已是英文、输出区仍是中文」这类不一致。
+
+- **用官方安装脚本（GitHub Release）**：升级只需重跑安装脚本。内嵌后端随二进制一起更新
+  （释放目录 `~/.local/share/gocryptfs-tui/backend/` 内容变化时才重写），天然配套。
+- **用 `make install` / `install.sh`**：会同时覆盖 TUI 与 `~/.local/lib/gocryptfs-tui/`
+  下的独立后端；TUI 默认使用内嵌副本，如需强制使用系统安装的后端，设
+  `GOCRYPTFS_CLI=$(command -v gocryptfs-cli)`。
 
 ```bash
 make install           # 覆盖安装到 ~/.local（TUI + Shell 后端，无需 sudo）
