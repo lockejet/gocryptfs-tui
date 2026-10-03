@@ -2,7 +2,7 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/)。
 
-## [Unreleased]
+## [0.2.1] - 2026-10-03
 
 ### Features
 - TUI 二进制内嵌 Shell 后端（`gocryptfs-cli` + `lib/{gocryptfs-lib.sh,i18n.sh}`）：
