@@ -39,3 +39,74 @@ cargo release --version
 git-cliff --version
 dist --version          # 注意：不是 cargo dist
 gh --version
+
+---
+
+## CHANGELOG 与发布流程
+
+**CHANGELOG.md 不会被自动改写。** `Cargo.toml` 中没有配置 `pre-release-hook`，
+因此 `make dry-run` / `cargo release --dry-run` 不会产生任何文件写入。
+
+| 命令 | 行为 |
+|------|------|
+| `make changelog-preview` | 只生成预览到 `.staging/CHANGELOG.preview.md`（`.staging/` 已 gitignore），**不动** `CHANGELOG.md` |
+| `make changelog` | **显式重写** `CHANGELOG.md`：git-cliff 生成 + 合并 `changelog.d/` 片段（片段保留）；默认 `[Unreleased]` 段，`make changelog TAG=v0.2.0` 生成指定版本段并归档片段 |
+| `make dry-run` | 只读预览 cargo-release 动作，不改动任何文件 |
+| `make release` | `check` → `release-check` → `changelog` → 提交 `CHANGELOG.md` → `cargo release --execute` |
+
+### 发布步骤
+
+```bash
+# 1. 确认代码与测试
+make check
+
+# 2. 先看 CHANGELOG 会变成什么（可选但推荐）
+make changelog-preview
+git diff --no-index -- CHANGELOG.md .staging/CHANGELOG.preview.md
+
+# 3. 前置检查（除 CHANGELOG.md 外工作区必须干净）
+make release-check
+
+# 4. 预览 cargo-release（只读）
+make dry-run
+
+# 5. 一步发布（生成并提交 CHANGELOG，然后 bump + tag + push）
+make release LEVEL=patch
+
+# 6. 查看 CI 与 Release
+gh run watch
+gh release view v0.1.3 --web
+```
+
+### 只想更新 CHANGELOG、不发布
+
+```bash
+make changelog
+git add CHANGELOG.md
+git commit -m "docs: 更新 CHANGELOG"
+```
+
+> 之所以去掉 `pre-release-hook`：cargo-release 的 hook 会在此前的 `--dry-run`
+> 中一并执行，导致"预览"也会重写 `CHANGELOG.md`（冲掉手工维护的 Unreleased 段落）。
+
+### 手写内容：changelog.d/ 片段
+
+提交标题表达不了的内容（长篇说明、升级注意）写成片段文件，随代码一起提交：
+
+```bash
+# 新增片段
+cat > changelog.d/2026-10-03-my-change.md <<'EOF'
+### Features
+- 新增 xxx（详细说明……）
+EOF
+
+make changelog-check      # 校验片段语法
+make changelog-preview    # 预览合并结果（不动 CHANGELOG.md）
+make changelog            # 合并进 [Unreleased]（片段保留，可反复生成）
+```
+
+- 组名用 `Features` / `Bug Fixes` / `Documentation` / `Build` 等，与 git-cliff 同名会自动合并。
+- 同一改动若已写片段，提交信息里加 `[skip changelog]`，避免 CHANGELOG 出现两条重复条目
+  （`cliff.toml` 已配置跳过）。
+- 发布时（`make release`）片段会并入新版本段并归档到 `changelog.d/archive/`。
+- 详情见 `changelog.d/README.md`。
