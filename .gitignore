@@ -7,12 +7,10 @@
 /bin
 
 # ===== 敏感配置 =====
-config.local.yaml
-config.yaml
-config.yml
+config*.yaml
+config*.yml
 *.local.yaml
 *.local.yml
-test-config.yaml
 !examples/*.example
 
 # ===== 密码 / 密钥 =====
@@ -49,3 +47,7 @@ Thumbs.db
 *~
 config.yaml.backup
 /bakup/
+
+# ===== Python =====
+__pycache__/
+*.pyc
