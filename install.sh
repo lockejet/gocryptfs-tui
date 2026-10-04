@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 # install.sh — 安装 / 卸载 gocryptfs-tui（TUI 二进制 + Shell 后端）
 #
 # 用法：
@@ -26,7 +26,7 @@
 #   * 安装会写清单 <prefix>/lib/gocryptfs-tui/INSTALLED.json 与 INSTALLED.files，
 #     `--uninstall` 按清单精确删除，不碰前缀里的其它文件。
 #   * 目标不可写时才使用 sudo；请勿直接用 sudo 运行本脚本（编译会用 root 的 cargo）。
-set -euo pipefail
+set -eu
 
 REPO="lockejet/gocryptfs-tui"
 PREFIX="${PREFIX:-/usr/local}"
@@ -39,7 +39,27 @@ RELEASE_VER=""
 DEPS_CHECK=1
 
 usage() {
-    sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'
+    cat <<'USAGE_EOF'
+install.sh — 安装 / 卸载 gocryptfs-tui（TUI 二进制 + Shell 后端）
+
+用法：
+  ./install.sh                         从本地源码安装（默认前缀 /usr/local，按需 sudo）
+  ./install.sh --prefix ~/.local       安装到指定前缀（无需 sudo）
+  ./install.sh --system                等价 --prefix /usr/local，并链接独立 CLI
+  ./install.sh --from-release          不编译：从 GitHub Release 下载当前平台二进制
+  ./install.sh --from-release v0.3.0   指定版本（等价 --version v0.3.0）
+  ./install.sh --uninstall             按安装清单卸载
+  ./install.sh --no-build              跳过编译，直接用已有产物安装
+  ./install.sh --link-cli              把 gocryptfs-cli 软链到 <prefix>/bin
+  ./install.sh --no-link-cli           即使 --system 也不链接
+  ./install.sh --no-deps-check         跳过安装后的运行时依赖检查
+
+  # 不需要源码/工具链时（Release 附件）：
+  curl -LsSf https://github.com/lockejet/gocryptfs-tui/releases/latest/download/gocryptfs-tui-install.sh \
+    | sh -s -- --system
+
+兼容 POSIX sh（dash），因此 `curl ... | sh` 可以直接用。
+USAGE_EOF
 }
 
 while [ $# -gt 0 ]; do
@@ -49,7 +69,7 @@ while [ $# -gt 0 ]; do
         --prefix=*)      PREFIX="${1#--prefix=}" ;;
         --system)        PREFIX="/usr/local"
                          # 系统级默认链接独立 CLI（--no-link-cli 可关掉，与顺序无关）
-                         [ "$LINK_CLI_SET" -eq 0 ] && LINK_CLI=1 ;;
+                         if [ "$LINK_CLI_SET" -eq 0 ]; then LINK_CLI=1; fi ;;
         --from-release)  FROM_RELEASE=1
                          case "${2:-}" in v[0-9]*) RELEASE_VER="$2"; shift ;; esac ;;
         --from-release=*) FROM_RELEASE=1; RELEASE_VER="${1#--from-release=}" ;;
@@ -91,9 +111,9 @@ probe="$PREFIX"
 while [ ! -e "$probe" ] && [ "$probe" != "/" ]; do
     probe="$(dirname "$probe")"
 done
-SUDO=()
+SUDO=""
 if [ ! -w "$probe" ]; then
-    if [ "$EUID" -eq 0 ]; then
+    if [ "$(id -u)" -eq 0 ]; then
         echo "[!] 检测到以 root 运行；本脚本需要普通用户身份运行。" >&2
         echo "    正确用法: ./install.sh（脚本内部会按需 sudo）" >&2
         exit 1
@@ -102,14 +122,14 @@ if [ ! -w "$probe" ]; then
         echo "[!] $PREFIX 不可写且未安装 sudo" >&2
         exit 1
     }
-    SUDO=(sudo)
+    SUDO="sudo"
 fi
 
-priv() { if [ ${#SUDO[@]} -gt 0 ]; then sudo "$@"; else "$@"; fi; }
+priv() { if [ -n "$SUDO" ]; then sudo "$@"; else "$@"; fi; }
 
 STAGE="$(mktemp -d)"
 DL=""
-cleanup() { rm -rf "$STAGE"; [ -n "$DL" ] && rm -rf "$DL"; }
+cleanup() { rm -rf "$STAGE"; if [ -n "$DL" ]; then rm -rf "$DL"; fi; }
 trap cleanup EXIT
 
 # ------------------------------------------------------------
@@ -157,6 +177,9 @@ if [ "$UNINSTALL" -eq 1 ]; then
     # 无论有无清单都清理已知路径，并删除空的 lib 目录
     priv rm -f "$BINDIR/gocryptfs-cli" "$BINDIR/gocryptfs-tui"
     priv rm -rf "$LIBDIR"
+    # 只在确认为空时才删父目录（非空会失败，不影响其它文件）
+    priv rmdir "$PREFIX/lib" >/dev/null 2>&1 || true
+    priv rmdir "$BINDIR" >/dev/null 2>&1 || true
     echo "[✔] 已卸载："
     echo "  $BINDIR/gocryptfs-tui"
     echo "  $BINDIR/gocryptfs-cli"
@@ -179,12 +202,12 @@ fi
 # ------------------------------------------------------------
 # ---- 运行时依赖（仅警告；真正的判定交给 TUI 的 --check-deps）----
 echo "==> 检查依赖"
-missing_deps=()
+missing_deps=""
 for cmd in gocryptfs fusermount rsync yq jq mountpoint; do
-    have "$cmd" || missing_deps+=("$cmd")
+    have "$cmd" || missing_deps="$missing_deps $cmd"
 done
-if [ ${#missing_deps[@]} -gt 0 ]; then
-    echo "[!] 缺少运行时依赖: ${missing_deps[*]}"
+if [ -n "$missing_deps" ]; then
+    echo "[!] 缺少运行时依赖:${missing_deps}"
     echo "    安装会继续；装完后按 'gocryptfs-tui --check-deps' 的提示补齐即可。"
 else
     echo "[✔] 依赖齐全"
@@ -278,7 +301,10 @@ priv mkdir -p "$LIBDIR/lib" "$BINDIR"
 priv rm -rf "$LIBDIR"
 priv mkdir -p "$LIBDIR/lib"
 
-installed=()
+# 已安装文件清单（供 INSTALLED.files / --uninstall 使用）
+: > "$STAGE/files"
+record() { printf '%s\n' "$1" >> "$STAGE/files"; }
+
 if [ -n "$SHELL_DIR" ]; then
     cp "$SHELL_DIR/lib/"*.sh "$STAGE/"
     cp "$SHELL_DIR/gocryptfs-cli" "$STAGE/"
@@ -286,20 +312,20 @@ if [ -n "$SHELL_DIR" ]; then
     chmod 0755 "$STAGE/gocryptfs-cli"
     priv cp -f "$STAGE"/*.sh "$LIBDIR/lib/"
     priv cp -f "$STAGE/gocryptfs-cli" "$LIBDIR/gocryptfs-cli"
-    installed+=("$LIBDIR/gocryptfs-cli")
-    for f in "$SHELL_DIR"/lib/*.sh; do installed+=("$LIBDIR/lib/$(basename "$f")"); done
+    record "$LIBDIR/gocryptfs-cli"
+    for f in "$SHELL_DIR"/lib/*.sh; do record "$LIBDIR/lib/$(basename "$f")"; done
 fi
 priv cp -f "$BIN_SRC" "$BINDIR/gocryptfs-tui"
 priv chmod 0755 "$BINDIR/gocryptfs-tui" "$LIBDIR/gocryptfs-cli" 2>/dev/null || true
-installed+=("$BINDIR/gocryptfs-tui")
+record "$BINDIR/gocryptfs-tui"
 
 printf '%s\n' "$BIN_VERSION" > "$STAGE/VERSION"
 priv cp -f "$STAGE/VERSION" "$LIBDIR/VERSION"
-installed+=("$LIBDIR/VERSION")
+record "$LIBDIR/VERSION"
 
 if [ "$LINK_CLI" = "1" ] && [ -n "$SHELL_DIR" ]; then
     priv ln -sf "$LIBDIR/gocryptfs-cli" "$BINDIR/gocryptfs-cli"
-    installed+=("$BINDIR/gocryptfs-cli")
+    record "$BINDIR/gocryptfs-cli"
 elif [ "$LINK_CLI" = "1" ]; then
     echo "[!] 没有独立后端可链接（--from-release 未取到 shell/）"
 fi
@@ -313,16 +339,19 @@ fi
     printf '  "source": "%s",\n' "$(json_escape "$SOURCE_DESC")"
     printf '  "installed_at": "%s",\n' "$(date -Iseconds)"
     printf '  "files": [\n'
-    for i in "${!installed[@]}"; do
-        sep=","; [ "$i" -eq $((${#installed[@]} - 1)) ] && sep=""
-        printf '    "%s"%s\n' "$(json_escape "${installed[$i]}")" "$sep"
-    done
+    n=0
+    total=$(wc -l < "$STAGE/files" | tr -d ' ')
+    while IFS= read -r f; do
+        n=$((n + 1))
+        sep=","
+        if [ "$n" -eq "$total" ]; then sep=""; fi
+        printf '    "%s"%s\n' "$(json_escape "$f")" "$sep"
+    done < "$STAGE/files"
     printf '  ]\n'
     printf '}\n'
 } > "$STAGE/INSTALLED.json"
-printf '%s\n' "${installed[@]}" > "$STAGE/INSTALLED.files"
 priv cp -f "$STAGE/INSTALLED.json" "$MANIFEST"
-priv cp -f "$STAGE/INSTALLED.files" "$MANIFEST_FILES"
+priv cp -f "$STAGE/files" "$MANIFEST_FILES"
 
 # ---- 自检 ----
 echo ""
@@ -387,4 +416,9 @@ echo "==> 文件清单"
 find "$LIBDIR" -type f | sort
 echo ""
 echo "直接运行:  gocryptfs-tui"
-echo "卸载:      $0 --uninstall${PREFIX:+ --prefix $PREFIX}"
+if [ -f "$0" ] && [ -r "$0" ]; then
+    echo "卸载:      $0 --uninstall --prefix $PREFIX"
+else
+    echo "卸载:      curl -LsSf https://github.com/$REPO/releases/latest/download/gocryptfs-tui-install.sh \\"
+    echo "             | sh -s -- --uninstall --prefix $PREFIX"
+fi
