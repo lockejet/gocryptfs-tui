@@ -248,7 +248,7 @@ pub static ENTRIES: &[(&str, &str)] = &[
     ("status.task_no_pid", "任务尚未启动 PID"),
     ("status.umount_cancelled", "已取消卸载"),
     ("statusbar.global", "全局: "),
-    ("statusbar.global_hint", "换页[1/2/3] [/] 换区[Tab/Shift+Tab][Alt+1/2/3/4] 设置[s] 历史[h] 编辑[e] 刷新[r] 帮助[?] 退出[q]"),
+    ("statusbar.global_hint", "换页[1/2/3/[/]] 换区[Tab/Shift+Tab][Alt+1/2/3/4] 设置[s] 历史[h] 编辑[e] 刷新[r] 帮助[?] 退出[q]"),
     ("statusbar.page_create", "创建向导[c/Enter] 目录[l] 树状[t]"),
     ("statusbar.page_index", "[{}] "),
     ("statusbar.page_label", "页面: "),

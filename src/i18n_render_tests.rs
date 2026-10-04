@@ -1251,7 +1251,7 @@ fn print_paths_report_lists_effective_paths() {
     i18n::set_lang(i18n::Lang::ZhCn);
 }
 
-/// 页签行不再显示分页提示（`page[Tab] or [ ]`）：该信息已在全局行的 `Page[1/2/3] [/]` 里。
+/// 页签行不再显示分页提示（`page[Tab] or [ ]`）：该信息已在全局行的 `Page[1/2/3/[/]]` 里。
 #[test]
 fn tab_bar_has_no_page_hint() {
     let _guard = lock_lang();

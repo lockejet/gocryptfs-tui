@@ -248,7 +248,7 @@ pub static ENTRIES: &[(&str, &str)] = &[
     ("status.task_no_pid", "Task has no PID yet"),
     ("status.umount_cancelled", "Unmount cancelled"),
     ("statusbar.global", "Global: "),
-    ("statusbar.global_hint", "Page[1/2/3] [/] Focus[Tab/Shift+Tab] [Alt+1/2/3/4] Settings[s] History[h] Edit[e] Reload[r] Help[?] Quit[q]"),
+    ("statusbar.global_hint", "Page[1/2/3/[/]] Focus[Tab/Shift+Tab] [Alt+1/2/3/4] Settings[s] History[h] Edit[e] Reload[r] Help[?] Quit[q]"),
     ("statusbar.page_create", "Create Wizard[c/Enter] Directory[l] Tree[t]"),
     ("statusbar.page_index", "[{}] "),
     ("statusbar.page_label", "Page: "),
