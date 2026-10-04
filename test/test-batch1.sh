@@ -145,6 +145,20 @@ printf '%s' "$err" | grep -q '缺少依赖' && [ "$rc" -ne 0 ] && loud=1
 check "缺 yq 时 list 报错且退出码非 0" "1" "$loud"
 rm -rf "$tmpbin"
 
+# 16. 缺卷名时 info/ls/tree/mount 应给用法，而不是 set -u 崩溃
+bad=0
+for c in info ls tree mount; do
+    err="$(bash "$CLI" -c "$CONFIG" "$c" 2>&1 >/dev/null)"
+    printf '%s' "$err" | grep -q "unbound variable" && bad=1
+    printf '%s' "$err" | grep -q "用法:" || bad=1
+done
+check "缺卷名的 info/ls/tree/mount 给用法而非崩溃" "0" "$bad"
+
+# 17. 选项缺值时报错明确
+out="$(bash "$CLI" -c "$CONFIG" log --limit 2>&1 >/dev/null)"
+case "$out" in *"需要一个值"*) v=1 ;; *) v=0 ;; esac
+check "选项缺值报错明确（--limit）" "1" "$v"
+
 echo "===== 结果 ====="
 echo "PASS: $PASS"
 echo "FAIL: $FAIL"

@@ -94,6 +94,12 @@ emit_done() {
     [ "$JSON_MODE" != true ] && echo "[✔] $1" >&2
     printf '@@DONE@@ %s\n' "$1" >&2
 }
+# 需要值的选项：缺值时给出明确报错（而不是 set -u 的 unbound variable）
+require_value() {
+    local opt="$1" val="${2:-}"
+    [ -n "$val" ] || emit_error $EXIT_ERROR "$(t error.need_value "$opt")"
+}
+
 emit_error() {
     local code="$1" msg="$2"
     if [ "$JSON_MODE" = true ] && command -v jq >/dev/null 2>&1; then
@@ -360,8 +366,8 @@ _list_table() {
 }
 cmd_info() {
     require_config
-    local name="$1"
-    [ -z "$name" ] && emit_error $EXIT_ERROR "$(t usage.info)"
+    local name="${1:-}"
+    [ -n "$name" ] || emit_error $EXIT_ERROR "$(t usage.info)"
     vault_exists "$name" || emit_error $EXIT_ERROR "$(t error.vault_missing "$name")"
     local id path mp mounted=false locked=false valid=false mode="-"
     id=$(get_vault_field "$name" "id")
@@ -391,8 +397,8 @@ cmd_info() {
 # § 13. ls / tree
 cmd_ls() {
     require_config
-    local name="$1"
-    [ -z "$name" ] && emit_error $EXIT_ERROR "$(t usage.ls)"
+    local name="${1:-}"
+    [ -n "$name" ] || emit_error $EXIT_ERROR "$(t usage.ls)"
     vault_exists "$name" || emit_error $EXIT_ERROR "$(t error.vault_missing "$name")"
     local mp; mp=$(get_vault_field "$name" "mount_point")
     is_mounted "$mp" || emit_error $EXIT_STATE "$(t error.not_mounted "$name")"
@@ -410,8 +416,8 @@ cmd_ls() {
 }
 cmd_tree() {
     require_config
-    local name="$1"
-    [ -z "$name" ] && emit_error $EXIT_ERROR "$(t usage.tree)"
+    local name="${1:-}"
+    [ -n "$name" ] || emit_error $EXIT_ERROR "$(t usage.tree)"
     vault_exists "$name" || emit_error $EXIT_ERROR "$(t error.vault_missing "$name")"
     local mp; mp=$(get_vault_field "$name" "mount_point")
     is_mounted "$mp" || emit_error $EXIT_STATE "$(t error.not_mounted "$name")"
@@ -432,8 +438,8 @@ cmd_tree() {
 # § 14. mount
 cmd_mount() {
     require_config
-    local name="$1"
-    [ -z "$name" ] && emit_error $EXIT_ERROR "$(t usage.mount)"
+    local name="${1:-}"
+    [ -n "$name" ] || emit_error $EXIT_ERROR "$(t usage.mount)"
     vault_exists "$name" || emit_error $EXIT_ERROR "$(t error.vault_missing "$name")"
 
     local path mp
@@ -547,8 +553,8 @@ cmd_create() {
     local src="" name="" cipher="" keep_source="" yes=false
     while [ $# -gt 0 ]; do
         case "$1" in
-            --name)           name="$2"; shift 2 ;;
-            --cipher)         cipher="$2"; shift 2 ;;
+            --name)           require_value --name "${2:-}"; name="$2"; shift 2 ;;
+            --cipher)         require_value --cipher "${2:-}"; cipher="$2"; shift 2 ;;
             --keep-source)    keep_source=true; shift ;;
             --no-keep-source) keep_source=false; shift ;;
             --yes|-y)         yes=true; shift ;;
@@ -681,7 +687,7 @@ cmd_remove() {
             --no-restore)    restore=false; shift ;;
             --delete-cipher) keep_cipher=false; shift ;;
             --keep-cipher)   keep_cipher=true; shift ;;
-            --target)        target="$2"; shift 2 ;;
+            --target)        require_value --target "${2:-}"; target="$2"; shift 2 ;;
             --yes|-y)        yes=true; shift ;;
             -*) emit_error $EXIT_ERROR "$(t error.unknown_option "$1")" ;;
             *) name="$1"; shift ;;
@@ -803,11 +809,11 @@ cmd_log() {
 
     while [ $# -gt 0 ]; do
         case "$1" in
-            --limit)  limit="$2"; shift 2 ;;
-            --src)    src="$2"; shift 2 ;;
-            --action) action="$2"; shift 2 ;;
-            --result) result="$2"; shift 2 ;;
-            --since)  since="$2"; shift 2 ;;
+            --limit)  require_value --limit "${2:-}"; limit="$2"; shift 2 ;;
+            --src)    require_value --src "${2:-}"; src="$2"; shift 2 ;;
+            --action) require_value --action "${2:-}"; action="$2"; shift 2 ;;
+            --result) require_value --result "${2:-}"; result="$2"; shift 2 ;;
+            --since)  require_value --since "${2:-}"; since="$2"; shift 2 ;;
             --follow) follow=true; shift ;;
             -*) emit_error $EXIT_ERROR "$(t error.unknown_option "$1")" ;;
             *) shift ;;
