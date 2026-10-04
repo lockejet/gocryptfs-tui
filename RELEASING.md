@@ -132,7 +132,20 @@ printf '%s\n\n## 运行时依赖\n\n- gocryptfs / fusermount(fuse3) / rsync / yq
   | gh release edit v0.3.0 --notes-file -
 ```
 
-同时确认安装落点已切到 `~/.local/bin`（本次变更由 CI 在发布时生成安装脚本）：
+同时确认两个安装脚本都在 Release 里，并冒烟一次（不需要源码）：
+
+```bash
+gh release view v0.3.0 --json assets --jq '.assets[].name' | grep -E 'installer\.sh|install\.sh'
+
+curl -LsSf https://github.com/lockejet/gocryptfs-tui/releases/latest/download/gocryptfs-tui-install.sh \
+  | sh -s -- --prefix /tmp/gocryptfs-tui-smoke --link-cli
+/tmp/gocryptfs-tui-smoke/bin/gocryptfs-tui --version
+/tmp/gocryptfs-tui-smoke/bin/gocryptfs-cli --version
+curl -LsSf https://github.com/lockejet/gocryptfs-tui/releases/latest/download/gocryptfs-tui-install.sh \
+  | sh -s -- --uninstall --prefix /tmp/gocryptfs-tui-smoke
+```
+
+确认安装落点已切到 `~/.local/bin`（由 CI 在发布时生成安装脚本）：
 
 ```bash
 curl -LsSf https://github.com/lockejet/gocryptfs-tui/releases/latest/download/gocryptfs-tui-installer.sh \

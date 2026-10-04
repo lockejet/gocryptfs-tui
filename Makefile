@@ -123,6 +123,10 @@ test-i18n: build-debug  ## 运行 i18n 验收测试（TUI + Shell 语言解析�
 test-cli: build  ## 运行 CLI shell 测试批次
 	bash test/test-all.sh
 
+.PHONY: test-install
+test-install: build  ## 安装/卸载回归测试（install.sh，本地源码模式）
+	bash test/test-install.sh
+
 .PHONY: test-env
 test-env:  ## 生成 shell 测试环境（/tmp/gocryptfs-tui-test/）
 	bash test/create-test-env.sh
@@ -133,7 +137,7 @@ test-env-clean:  ## 清理 shell 测试环境
 	bash test/cleanup-test-env.sh
 
 .PHONY: verify
-verify: check test-i18n test-cli  ## 完整验证：静态检查 + 单元测试 + i18n + CLI 测试
+verify: check test-i18n test-cli test-install  ## 完整验证：静态检查 + 单元测试 + i18n + CLI/安装测试
 	@echo ">>> 验证二进制:"
 	@$(BUILD_DIR)/$(BIN) --version || true
 	@echo ">>> 全部通过"
@@ -325,6 +329,7 @@ help:  ## 显示本帮助
 	@echo "  make fmt-check         检查格式（不修改）"
 	@echo "  make test              Rust 单元测试"
 	@echo "  make test-cli          运行 CLI shell 测试批次"
+	@echo "  make test-install      运行安装/卸载回归测试"
 	@echo "  make test-env          生成 shell 测试环境"
 	@echo "  make test-env-clean    清理 shell 测试环境"
 	@echo "  make verify            完整验证（check + test-cli + 二进制自检）"

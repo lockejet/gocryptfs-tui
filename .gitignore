@@ -5,6 +5,8 @@
 /dist
 /.staging
 /bin
+# cargo-dist 的 extra-artifacts 本地构建产物（CI 里生成，不入库）
+/gocryptfs-tui-install.sh
 
 # ===== 敏感配置 =====
 config*.yaml

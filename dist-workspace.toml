@@ -24,3 +24,10 @@ install-updater = false
 #   * cargo-dist 的 dependencies（apt/homebrew，stage=run）只对 Homebrew formula / MSI 生效，
 #     本项目只构建 Linux 目标，故不声明；
 #   * 依赖检查改为三处提示：install.sh 安装后、TUI 首次运行、`gocryptfs-tui --check-deps`。
+
+# 把 install.sh 作为 Release 附件一起发布（文件名为 gocryptfs-tui-install.sh）
+# 用途：没有源码/工具链的机器上一条命令完成用户级或系统级安装
+#   curl -LsSf https://github.com/lockejet/gocryptfs-tui/releases/latest/download/gocryptfs-tui-install.sh | sh -s -- --system
+[[dist.extra-artifacts]]
+artifacts = ["gocryptfs-tui-install.sh"]
+build = ["cp", "install.sh", "gocryptfs-tui-install.sh"]

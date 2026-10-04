@@ -89,14 +89,15 @@ gocryptfs-cli --check-deps
 
 三种方式**默认落到同一套路径**（用户级 `~/.local`，遵循 XDG），只是入口不同：
 
-| 安装方式 | 适合场景 | 主程序 | 独立 CLI |
+| 入口 | 适合场景 | 主程序 | 独立 CLI |
 |---|---|---|---|
-| 官方安装脚本 | 只想装二进制 | `~/.local/bin/gocryptfs-tui` | 用内嵌副本（见下） |
-| `make install` / `install.sh` | 有源码、要一并装后端 | `~/.local/bin/gocryptfs-tui` | `~/.local/lib/gocryptfs-tui/gocryptfs-cli` |
+| 官方安装脚本（`-installer.sh`） | 只想装二进制、用户级 | `~/.local/bin/gocryptfs-tui` | 用内嵌副本（见下） |
+| **官方二进制安装脚本（`-install.sh`）** | **不需要源码；支持系统级/指定前缀/卸载** | `~/.local/bin` 或 `--prefix` 指定 | 随包安装到 `<prefix>/lib/gocryptfs-tui`，`--link-cli` 可链接 |
+| 本地源码 `make install` / `./install.sh` | 有源码 | `~/.local/bin/gocryptfs-tui` | `~/.local/lib/gocryptfs-tui/gocryptfs-cli` |
 | 手动解压 tar.xz | 离线/自定义 | 建议放 `~/.local/bin/` | 用内嵌副本 |
 
-系统级安装统一用 `--prefix /usr/local`（`make install-system` / `./install.sh`），
-官方脚本可用 `GOCRYPTFS_TUI_INSTALL_DIR=/usr/local/bin` 覆盖。
+系统级安装推荐 **`gocryptfs-tui-install.sh --system`**（下节）或 `sudo ./install.sh --prefix /usr/local`；
+官方 `-installer.sh` 也能用 `GOCRYPTFS_TUI_INSTALL_DIR=/usr/local`（需配合 `GOCRYPTFS_TUI_NO_MODIFY_PATH=1`）。
 
 安装后统一自检：
 
@@ -145,6 +146,41 @@ curl --proto '=https' --tlsv1.2 -LsSf \
 >
 > 运行时仍需系统提供：`gocryptfs`、`fusermount`、`rsync`、`yq`（**mikefarah Go 版 v4**）、
 > `jq`、`mountpoint`（树状视图另需 `tree`）。缺失时后端会明确报出缺哪个命令。
+
+### 系统级安装 / 任意前缀（不需要源码）
+
+Release 里除了 cargo-dist 的 `-installer.sh`，还附带了本仓库的 `install.sh`
+（发布名 **`gocryptfs-tui-install.sh`**）——它不需要 Rust 工具链，支持系统级安装、
+指定前缀、依赖检查与按清单卸载：
+
+```bash
+# 系统级 → /usr/local/bin/gocryptfs-tui（按需 sudo，并链接 /usr/local/bin/gocryptfs-cli）
+curl -LsSf https://github.com/lockejet/gocryptfs-tui/releases/latest/download/gocryptfs-tui-install.sh \
+  | sh -s -- --system
+
+# 用户级（默认前缀 ~/.local）
+curl -LsSf https://github.com/lockejet/gocryptfs-tui/releases/latest/download/gocryptfs-tui-install.sh | sh
+
+# 指定前缀 / 指定版本 / 一并链接 CLI
+curl -LsSf .../gocryptfs-tui-install.sh | sh -s -- --prefix /opt/gocryptfs-tui --link-cli --version v0.3.0
+
+# 卸载（读安装清单，精确删除，不动前缀里的其它文件）
+curl -LsSf .../gocryptfs-tui-install.sh | sh -s -- --uninstall --system
+```
+
+| 选项 | 说明 |
+|---|---|
+| `--system` | 等价 `--prefix /usr/local`，并默认链接独立 CLI |
+| `--prefix DIR` | 安装前缀（默认 `/usr/local`；本脚本用 `--prefix ~/.local` 做用户级） |
+| `--version vX.Y.Z` | 从指定 Release 安装（默认 `latest`） |
+| `--from-release[=vX.Y.Z]` | 不编译，直接取 Release 二进制（`--version` 隐含它） |
+| `--link-cli` / `--no-link-cli` | 是否把 `gocryptfs-cli` 链到 `<prefix>/bin` |
+| `--no-deps-check` | 跳过安装后的依赖检查 |
+| `--uninstall` | 按 `<prefix>/lib/gocryptfs-tui/INSTALLED.files` 卸载 |
+
+- 会校验下载包的 **sha256**，独立 CLI 从同一 Release 的 `source.tar.gz` 取（保证版本配套）；
+- 安装会写清单 `INSTALLED.json` / `INSTALLED.files`（版本、来源、文件列表、时间）；
+- **不自动改 PATH**，只打印需要执行的 `export PATH=...`（官方 `-installer.sh` 则会改 shell profile）。
 
 ### 方式二：手动下载
 
@@ -225,8 +261,11 @@ make uninstall-system
 # 指定前缀
 make uninstall PREFIX=/opt/gocryptfs-tui
 
-# 如果是 cargo-dist/shell installer 安装的
-gocryptfs-tui-installer.sh uninstall
+# 用 gocryptfs-tui-install.sh 装的（按安装清单精确卸载）
+curl -LsSf .../gocryptfs-tui-install.sh | sh -s -- --uninstall --prefix /usr/local
+
+# 用官方 -installer.sh 装的（0.3.0 起不再写 receipt，没有 uninstall 子命令）
+rm -f ~/.local/bin/gocryptfs-tui
 ```
 
 > 三种方式都**不删**配置与数据：配置 `~/.config/gocryptfs-tui/`、
@@ -234,7 +273,8 @@ gocryptfs-tui-installer.sh uninstall
 > 需要彻底清理时自行删除这两个目录。
 >
 > `make uninstall` 只删除 `$PREFIX/bin/gocryptfs-tui`、`$PREFIX/bin/gocryptfs-cli`
-> 与 `$PREFIX/lib/gocryptfs-tui/`，并在命令末尾提示 PATH 中是否仍残留其他安装。
+> 与 `$PREFIX/lib/gocryptfs-tui/`；`install.sh --uninstall` 优先读安装清单
+> （`INSTALLED.files`）逐条删除，只允许删前缀内的路径，并在命令末尾提示 PATH 中是否仍残留其他安装。
 > 手工清理等价于：
 > `rm -rf <PREFIX>/lib/gocryptfs-tui <PREFIX>/bin/gocryptfs-cli <PREFIX>/bin/gocryptfs-tui`。
 
