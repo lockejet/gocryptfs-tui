@@ -105,12 +105,24 @@ out="$(cat "$INSTALL" | sh -s -- --prefix "$P4" --no-build --no-deps-check 2>&1 
 case "$out" in *"gocryptfs-tui-install.sh"*) v=1 ;; *) v=0 ;; esac
 check "管道执行: 卸载提示给出 URL 形式" "1" "$v"
 
-# ---- 5. 模式自动判断 ----
+# ---- 5. 默认落点与 --user（用假 HOME，避免动真实 ~/.local）----
+FAKEHOME="$TMP/home1"
+mkdir -p "$FAKEHOME"
+env HOME="$FAKEHOME" sh "$INSTALL" --no-build --no-deps-check >/dev/null 2>&1
+check "默认落点为用户级 ~/.local" "yes" "$(exists "$FAKEHOME/.local/bin/gocryptfs-tui")"
+check "默认落点不含系统目录" "no" "$(exists "$FAKEHOME/usr/local/bin/gocryptfs-tui")"
+
+FAKEHOME2="$TMP/home2"
+mkdir -p "$FAKEHOME2"
+env HOME="$FAKEHOME2" sh "$INSTALL" --user --no-build --no-deps-check >/dev/null 2>&1
+check "--user 等价默认落点" "yes" "$(exists "$FAKEHOME2/.local/bin/gocryptfs-tui")"
+
+# ---- 6. 模式自动判断 ----
 # 5.1 管道执行（无源码树）→ 必须走 Release，绝不能尝试编译
 out="$(GOCRYPTFS_TUI_REPO=nonexistent/none cat "$INSTALL" | sh -s -- --prefix "$TMP/mode-release" 2>&1 || true)"
 case "$out" in *"安装来源: Release"*) v=1 ;; *) v=0 ;; esac
 check "管道执行默认走 Release" "1" "$v"
-case "$out" in *"编译"*) v=0 ;; *) v=1 ;; esac
+case "$out" in *"编译 gocryptfs-tui"*) v=0 ;; *) v=1 ;; esac
 check "管道执行不会尝试编译" "1" "$v"
 
 # 5.2 仓库内执行 → 本地模式；没有 cargo 时给出可操作提示
@@ -125,7 +137,27 @@ out="$(cat "$INSTALL" | sh -s -- --local --no-build --prefix "$TMP/mode-forced" 
 case "$out" in *"安装来源: 本地源码"*) v=1 ;; *) v=0 ;; esac
 check "--local 强制本地模式" "1" "$v"
 
-# ---- 5. 参数解析：--version 需要版本号；未知参数报错 ----
+# 6.3 源码树里没有产物也没有 cargo → 自动回退 Release（不再因缺 cargo 失败）
+FAKEREPO="$TMP/fakerepo"
+mkdir -p "$FAKEREPO/src"
+: > "$FAKEREPO/Cargo.toml"
+: > "$FAKEREPO/src/main.rs"
+cp "$INSTALL" "$FAKEREPO/install.sh"
+out="$(cd "$FAKEREPO" && env PATH=/usr/bin:/bin GOCRYPTFS_TUI_REPO=nonexistent/none sh ./install.sh --prefix "$TMP/fallback" 2>&1 || true)"
+case "$out" in *"自动改用 Release"*) v=1 ;; *) v=0 ;; esac
+check "无 cargo 时自动回退 Release" "1" "$v"
+case "$out" in *"本地模式需要 Rust 工具链"*) v=0 ;; *) v=1 ;; esac
+check "回退时不报致命 cargo 错误" "1" "$v"
+
+# 6.4 clone 模式默认取当前 checkout 的 tag
+tag="$(git -C "$PROJECT_ROOT" describe --tags --abbrev=0 2>/dev/null || true)"
+if [ -n "$tag" ]; then
+    out="$(cd "$PROJECT_ROOT" && GOCRYPTFS_TUI_REPO=nonexistent/none sh "$INSTALL" --from-release --prefix "$TMP/tagver" 2>&1 || true)"
+    case "$out" in *"Release（$tag,"*) v=1 ;; *) v=0 ;; esac
+    check "clone 模式默认版本为当前 tag ($tag)" "1" "$v"
+fi
+
+# ---- 7. 参数解析：--version 需要版本号；未知参数报错 ----
 out="$(sh "$INSTALL" --version 2>&1 >/dev/null || true)"
 case "$out" in *"需要版本号"*) v=1 ;; *) v=0 ;; esac
 check "--version 缺版本号报错" "1" "$v"

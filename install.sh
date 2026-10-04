@@ -11,7 +11,7 @@
 set -eu
 
 REPO="${GOCRYPTFS_TUI_REPO:-lockejet/gocryptfs-tui}"
-PREFIX="${PREFIX:-/usr/local}"
+PREFIX="${PREFIX:-$HOME/.local}"
 DO_BUILD=1
 UNINSTALL=0
 LINK_CLI="${LINK_CLI:-0}"
@@ -25,13 +25,20 @@ usage() {
     cat <<'USAGE_EOF'
 install.sh — 安装 / 卸载 gocryptfs-tui（TUI 二进制 + Shell 后端）
 
-用法：
-  ./install.sh                         从本地源码安装（默认前缀 /usr/local，按需 sudo）
-  ./install.sh --prefix ~/.local       安装到指定前缀（无需 sudo）
-  ./install.sh --system                等价 --prefix /usr/local，并链接独立 CLI
+用法（三种模式共用一个脚本）：
+  懒人    curl -LsSf <release>/gocryptfs-tui-install.sh | sh -s -- [--user|--system]
+  clone   git clone … && ./install.sh --from-release [--user|--system]
+  手动    git clone … && make build && ./install.sh --local [--user|--system]
+
+落点（默认 --user）：
+  --user              装到 ~/.local（默认；无需 sudo）
+  --system            装到 /usr/local，并默认链接独立 CLI（按需 sudo）
+  --prefix DIR        指定前缀
+
+模式与卸载：
   ./install.sh --local                 强制本地源码模式（需要 cargo）
   ./install.sh --from-release          不编译：从 GitHub Release 下载当前平台二进制
-  ./install.sh --from-release v0.3.0   指定版本（等价 --version v0.3.0）
+  ./install.sh --from-release v0.4.2   指定版本（等价 --version v0.4.2）
   ./install.sh --uninstall             按安装清单卸载
   ./install.sh --no-build              跳过编译，直接用已有产物安装
   ./install.sh --link-cli              把 gocryptfs-cli 软链到 <prefix>/bin
@@ -54,6 +61,7 @@ while [ $# -gt 0 ]; do
         --uninstall|-u)  UNINSTALL=1 ;;
         --prefix)        PREFIX="${2:?--prefix 需要目录}"; shift ;;
         --prefix=*)      PREFIX="${1#--prefix=}" ;;
+        --user)          PREFIX="$HOME/.local" ;;
         --system)        PREFIX="/usr/local"
                          # 系统级默认链接独立 CLI（--no-link-cli 可关掉，与顺序无关）
                          if [ "$LINK_CLI_SET" -eq 0 ]; then LINK_CLI=1; fi ;;
@@ -204,11 +212,18 @@ fi
 
 # ---- 模式自动判断 ----
 # curl|sh 时没有源码树（$0 也不是可读文件），必须走 Release；否则在源码目录里就本地编译。
+IN_REPO=0
+if [ -f Cargo.toml ] && [ -f src/main.rs ] && [ -f "$0" ] && [ -r "$0" ]; then
+    IN_REPO=1
+fi
 if [ -z "$MODE" ]; then
-    if [ -f Cargo.toml ] && [ -f src/main.rs ] && [ -f "$0" ] && [ -r "$0" ]; then
+    if [ "$IN_REPO" -eq 1 ] && { [ -f target/release/gocryptfs-tui ] || have cargo; }; then
         MODE="local"
     else
         MODE="release"
+        if [ "$IN_REPO" -eq 1 ]; then
+            echo "[·] 未找到 cargo 与 target/release，自动改用 Release 二进制（--local 可强制本地编译）"
+        fi
     fi
 fi
 if [ "$MODE" = "release" ]; then FROM_RELEASE=1; fi
@@ -232,6 +247,10 @@ if [ "$FROM_RELEASE" -eq 1 ]; then
     target="${arch}-unknown-linux-${libc}"
     asset="gocryptfs-tui-${target}.tar.xz"
 
+    # 未指定版本：在 git checkout 里优先用当前 tag（保证与该份源码对应），否则用 latest
+    if [ -z "$RELEASE_VER" ] && have git && git rev-parse --git-dir >/dev/null 2>&1; then
+        RELEASE_VER="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+    fi
     if [ -n "$RELEASE_VER" ]; then
         base="https://github.com/$REPO/releases/download/$RELEASE_VER"
         ver_label="$RELEASE_VER"

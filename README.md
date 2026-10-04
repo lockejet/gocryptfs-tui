@@ -79,7 +79,7 @@ gocryptfs-tui --check-deps     # 推荐：缺什么、怎么装，一并打印�
 gocryptfs-cli --check-deps
 ```
 
-- 用**官方安装脚本**或 `./install.sh` 安装时，安装结束后会自动跑这项检查并提示；
+- 三种安装模式都会在安装结束后自动跑这项检查并提示（`--no-deps-check` 可跳过）；
 - TUI **首次运行**时若缺必需依赖（或 `yq` 版本不对），会把提示写到输出区，
   不会只表现为「列表为空」或「执行失败」。
 
@@ -87,196 +87,146 @@ gocryptfs-cli --check-deps
 
 ## 安装
 
-三种方式**默认落到同一套路径**（用户级 `~/.local`，遵循 XDG），只是入口不同：
+**三种模式，同一个脚本、同一套选项**，落点与配置完全一致：
 
-| 入口 | 适合场景 | 主程序 | 独立 CLI |
+| 模式 | 适合 | 命令 | 需要 |
 |---|---|---|---|
-| 官方安装脚本（`-installer.sh`） | 只想装二进制、用户级 | `~/.local/bin/gocryptfs-tui` | 用内嵌副本（见下） |
-| **官方二进制安装脚本（`-install.sh`）** | **不需要源码；支持系统级/指定前缀/卸载** | `~/.local/bin` 或 `--prefix` 指定 | 随包安装到 `<prefix>/lib/gocryptfs-tui`，`--link-cli` 可链接 |
-| 本地源码 `make install` / `./install.sh` | 有源码 | `~/.local/bin/gocryptfs-tui` | `~/.local/lib/gocryptfs-tui/gocryptfs-cli` |
-| 手动解压 tar.xz | 离线/自定义 | 建议放 `~/.local/bin/` | 用内嵌副本 |
+| ① **懒人** | 只想装上 | `curl -LsSf <release>/gocryptfs-tui-install.sh \| sh -s -- --user`（或 `--system`） | `curl` + POSIX sh |
+| ② **git clone** | 想留脚本 / 可重复安装，不想装 Rust | `git clone … && cd gocryptfs-tui && ./install.sh --from-release --user` | `git` + `curl` |
+| ③ **手动（源码）** | 自己编译 / 改代码 | `git clone … && cd gocryptfs-tui && make build && ./install.sh --local --user` | `git` + **cargo** |
 
-系统级安装推荐 **`gocryptfs-tui-install.sh --system`**（下节）或 `sudo ./install.sh --prefix /usr/local`；
-官方 `-installer.sh` 也能用 `GOCRYPTFS_TUI_INSTALL_DIR=/usr/local`（需配合 `GOCRYPTFS_TUI_NO_MODIFY_PATH=1`）。
+落点（三种模式一致）：
 
-安装后统一自检：
+| 选项 | 落点 | 说明 |
+|---|---|---|
+| `--user`（默认） | `~/.local` | 无需 sudo |
+| `--system` | `/usr/local` | 按需 sudo，并默认把 `gocryptfs-cli` 链接到 `/usr/local/bin` |
+| `--prefix DIR` | 自定义 | 例如 `/opt/gocryptfs-tui` |
 
-```bash
-command -v gocryptfs-tui        # 期望 ~/.local/bin/gocryptfs-tui
-gocryptfs-tui --version
-gocryptfs-tui --check-deps
-```
+三种模式都会安装 `<prefix>/bin/gocryptfs-tui` 与 `<prefix>/lib/gocryptfs-tui/`
+（独立 Shell 后端 + `VERSION`），并写安装清单；都**不修改 shell profile**，只打印需要执行的
+`export PATH=…`；配置与数据目录遵循 XDG（见下），与安装方式无关。
 
-> **独立 CLI 的规范位置**：TUI 首次运行会把内嵌后端释放到
-> `<数据目录>/backend/gocryptfs-cli`（默认 `~/.local/share/gocryptfs-tui/backend/gocryptfs-cli`），
-> 三种安装方式一致。想直接在命令行用，可自行软链一次：
-> ```bash
-> ln -sf "${XDG_DATA_HOME:-$HOME/.local/share}/gocryptfs-tui/backend/gocryptfs-cli" \
->        "${XDG_BIN_HOME:-$HOME/.local/bin}/gocryptfs-cli"
-> ```
-> `make install`/`install.sh` 会把后端装到 `~/.local/lib/gocryptfs-tui/`，
-> 需要时用 `./install.sh --link-cli` 额外软链到 `~/.local/bin`。
-
-### 方式一：官方安装脚本（推荐）
+### ① 懒人模式（不需要源码、不需要工具链）
 
 ```bash
-curl --proto '=https' --tlsv1.2 -LsSf \
-    https://github.com/lockejet/gocryptfs-tui/releases/latest/download/gocryptfs-tui-installer.sh | sh
-```
+# 用户级 → ~/.local/bin（默认，无需 sudo）
+curl -LsSf https://github.com/lockejet/gocryptfs-tui/releases/latest/download/gocryptfs-tui-install.sh | sh
 
-脚本会自动：
-
-1. 检测系统架构（x86_64 / aarch64）
-2. 检测 libc（glibc / musl）
-3. 下载对应 tar.gz
-4. 安装到 `~/.local/bin`（与其它两种方式一致）
-5. 把该目录写入 shell profile 的 PATH（可用 `GOCRYPTFS_TUI_NO_MODIFY_PATH=1` 关闭）
-
-> 从 0.2.x 升级上来的用户：旧版官方脚本装在 `~/.cargo/bin`，新版装到 `~/.local/bin`，
-> 若 `~/.cargo/bin` 在 PATH 中更靠前会继续跑到旧版本。清理一次即可：
-> ```bash
-> rm -f ~/.cargo/bin/gocryptfs-tui ~/.cargo/bin/gocryptfs-tui-update
-> rm -f ~/.config/gocryptfs-tui/gocryptfs-tui-receipt.json
-> ```
-
-> **Shell 后端已内嵌在 TUI 二进制里**：首次运行 TUI 时会把 `gocryptfs-cli` 与
-> `lib/*.sh` 释放到 `~/.local/share/gocryptfs-tui/backend/`，因此**无需再单独安装 CLI**
-> （发行包只包含 `gocryptfs-tui` 一个可执行文件）。后端内容变化时（升级）会自动重写；
-> 设 `GOCRYPTFS_CLI=/path/to/gocryptfs-cli` 可改用自定义后端。
->
-> 运行时仍需系统提供：`gocryptfs`、`fusermount`、`rsync`、`yq`（**mikefarah Go 版 v4**）、
-> `jq`、`mountpoint`（树状视图另需 `tree`）。缺失时后端会明确报出缺哪个命令。
-
-### 系统级安装 / 任意前缀（不需要源码）
-
-Release 里除了 cargo-dist 的 `-installer.sh`，还附带了本仓库的 `install.sh`
-（发布名 **`gocryptfs-tui-install.sh`**）——它不需要 Rust 工具链，支持系统级安装、
-指定前缀、依赖检查与按清单卸载：
-
-```bash
-# 系统级 → /usr/local/bin/gocryptfs-tui（按需 sudo，并链接 /usr/local/bin/gocryptfs-cli）
+# 系统级 → /usr/local/bin（按需 sudo，并链接独立 CLI）
 curl -LsSf https://github.com/lockejet/gocryptfs-tui/releases/latest/download/gocryptfs-tui-install.sh \
   | sh -s -- --system
 
-# 用户级（默认前缀 ~/.local）
-curl -LsSf https://github.com/lockejet/gocryptfs-tui/releases/latest/download/gocryptfs-tui-install.sh | sh
-
-# 指定前缀 / 指定版本 / 一并链接 CLI
-curl -LsSf .../gocryptfs-tui-install.sh | sh -s -- --prefix /opt/gocryptfs-tui --link-cli --version v0.3.0
-
-# 卸载（读安装清单，精确删除，不动前缀里的其它文件）
-curl -LsSf .../gocryptfs-tui-install.sh | sh -s -- --uninstall --system
+# 指定版本
+curl -LsSf .../gocryptfs-tui-install.sh | sh -s -- --user --version v0.5.0
 ```
 
-| 选项 | 说明 |
-|---|---|
-| `--system` | 等价 `--prefix /usr/local`，并默认链接独立 CLI |
-| `--prefix DIR` | 安装前缀（默认 `/usr/local`；本脚本用 `--prefix ~/.local` 做用户级） |
-| `--version vX.Y.Z` | 从指定 Release 安装（默认 `latest`） |
-| `--from-release[=vX.Y.Z]` | 不编译，直接取 Release 二进制（`--version` 隐含它） |
-| `--link-cli` / `--no-link-cli` | 是否把 `gocryptfs-cli` 链到 `<prefix>/bin` |
-| `--no-deps-check` | 跳过安装后的依赖检查 |
-| `--uninstall` | 按 `<prefix>/lib/gocryptfs-tui/INSTALLED.files` 卸载 |
+脚本会：判定架构/libc → 下载对应 `tar.xz` 并**校验 sha256** → 从同一 Release 的
+`source.tar.gz` 取 `shell/` 作为独立后端（保证与 TUI 版本配套）→ 跑 `--check-deps`
+→ 写安装清单（`INSTALLED.json` / `INSTALLED.files`）。
 
-- 会校验下载包的 **sha256**，独立 CLI 从同一 Release 的 `source.tar.gz` 取（保证版本配套）；
-- 安装会写清单 `INSTALLED.json` / `INSTALLED.files`（版本、来源、文件列表、时间）；
-- **不自动改 PATH**，只打印需要执行的 `export PATH=...`（官方 `-installer.sh` 则会改 shell profile）。
+> **离线 / 内网**：直接在 [Releases](https://github.com/lockejet/gocryptfs-tui/releases)
+> 下载 `gocryptfs-tui-<target>.tar.xz`，解压后把 `gocryptfs-tui` 放到 `~/.local/bin`
+> 即可（内嵌后端会在首次运行时释放到数据目录）。
 
-### 方式二：手动下载
-
-从 [Releases 页面](https://github.com/lockejet/gocryptfs-tui/releases) 下载对应平台的包：
-
-| 平台 | 文件 |
-|------|------|
-| Linux amd64（glibc） | `gocryptfs-tui-*-linux-amd64.tar.gz` |
-| Linux arm64（glibc） | `gocryptfs-tui-*-linux-arm64.tar.gz` |
-| Linux amd64（musl 静态） | `gocryptfs-tui-*-linux-amd64-musl.tar.gz` |
-| Linux arm64（musl 静态） | `gocryptfs-tui-*-linux-arm64-musl.tar.gz` |
-
-解压后：
-
-```bash
-tar xzf gocryptfs-tui-*-linux-amd64.tar.gz
-cd gocryptfs-tui-*-linux-amd64
-
-# 安装 TUI
-sudo install -m 0755 gocryptfs-tui /usr/local/bin/
-
-# 安装 CLI
-sudo mkdir -p /usr/local/lib/gocryptfs-tui/lib
-sudo cp gocryptfs-cli /usr/local/lib/gocryptfs-tui/
-sudo cp lib/gocryptfs-lib.sh /usr/local/lib/gocryptfs-tui/lib/
-sudo chmod +x /usr/local/lib/gocryptfs-tui/gocryptfs-cli
-sudo ln -sf /usr/local/lib/gocryptfs-tui/gocryptfs-cli /usr/local/bin/gocryptfs-cli
-```
-
-### 方式三：从源码安装
+### ② git clone 模式（不需要 cargo）
 
 ```bash
 git clone https://github.com/lockejet/gocryptfs-tui.git
 cd gocryptfs-tui
-make build
-make install           # 安装 TUI + Shell 后端到 ~/.local（无需 sudo）
-# 或系统级安装：
-make install-system    # 安装到 /usr/local（内部按需 sudo，请勿直接 sudo 运行）
+./install.sh --from-release            # 默认取当前 checkout 的 tag；装到 ~/.local
+./install.sh --from-release --system   # 装到 /usr/local
 ```
+
+`--from-release` 会取当前 checkout 最近 tag 对应的 Release 资产；不在 git 仓库里时退回 `latest`。
+`./install.sh` 不带模式参数时也会自动判断：有源码且能编译 → 本地编译；否则用 Release 二进制。
+
+### ③ 手动模式（源码 + cargo）
+
+```bash
+git clone https://github.com/lockejet/gocryptfs-tui.git
+cd gocryptfs-tui
+make build                             # 或 cargo build --release
+./install.sh --local                   # 装到 ~/.local
+./install.sh --local --system          # 装到 /usr/local
+```
+
+`make install` / `make install-system` 是这一模式的便捷封装（等价 `--local --user` /
+`--local --system`）。
+
+### 安装选项（三种模式通用）
+
+| 选项 | 说明 |
+|---|---|
+| `--user` / `--system` / `--prefix DIR` | 落点（默认 `~/.local`） |
+| `--local` / `--from-release[=vX.Y.Z]` / `--version vX.Y.Z` | 强制模式或指定版本 |
+| `--uninstall` | 按安装清单精确卸载 |
+| `--link-cli` / `--no-link-cli` | 是否把 `gocryptfs-cli` 链到 `<prefix>/bin` |
+| `--no-deps-check` | 跳过安装后的依赖检查 |
+
+安装后统一自检：
+
+```bash
+command -v gocryptfs-tui        # 期望 ~/.local/bin/gocryptfs-tui（或 /usr/local/bin）
+gocryptfs-tui --version
+gocryptfs-tui --check-deps
+gocryptfs-tui --print-paths     # 排障：一次看清实际使用的全部路径
+```
+
+> **独立 CLI 的规范位置**：TUI 首次运行会把内嵌后端释放到
+> `${XDG_DATA_HOME:-~/.local/share}/gocryptfs-tui/backend/gocryptfs-cli`，
+> 三种模式一致。想直接在命令行用，可自行软链一次：
+> ```bash
+> ln -sf "${XDG_DATA_HOME:-$HOME/.local/share}/gocryptfs-tui/backend/gocryptfs-cli" \
+>        "${XDG_BIN_HOME:-$HOME/.local/bin}/gocryptfs-cli"
+> ```
+> `--system` 会自动把 `<prefix>/lib/gocryptfs-tui/gocryptfs-cli` 链接到 `/usr/local/bin`。
 
 ### 升级
 
-TUI 与 Shell 后端（`gocryptfs-cli` + `lib/*.sh`）必须**成套更新**，
-否则 TUI 可能调用到 `/usr/local/bin` 下的旧后端，出现「界面已是英文、输出区仍是中文」这类不一致。
-
-- **用官方安装脚本（GitHub Release）**：升级只需重跑安装脚本。内嵌后端随二进制一起更新
-  （释放目录 `~/.local/share/gocryptfs-tui/backend/` 内容变化时才重写），天然配套。
-- **用 `make install` / `install.sh`**：会同时覆盖 TUI 与 `~/.local/lib/gocryptfs-tui/`
-  下的独立后端；TUI 默认使用内嵌副本，如需强制使用系统安装的后端，设
-  `GOCRYPTFS_CLI=$(command -v gocryptfs-cli)`。
+TUI 与 Shell 后端（`gocryptfs-cli` + `lib/*.sh`）必须**成套更新**，否则可能出现
+「界面已是英文、输出区仍是中文」这类不一致。内嵌后端随二进制一起更新
+（释放目录 `${XDG_DATA_HOME:-~/.local/share}/gocryptfs-tui/backend/` 内容变化时才重写）。
 
 ```bash
-make install           # 覆盖安装到 ~/.local（TUI + Shell 后端，无需 sudo）
-make install-system    # 覆盖安装到 /usr/local
+# ① 懒人：重跑同一条命令
+curl -LsSf .../gocryptfs-tui-install.sh | sh -s -- --user
+
+# ② clone：git pull 后重跑
+git pull && ./install.sh --from-release --user
+
+# ③ 手动：重新编译后覆盖安装
+git pull && make build && ./install.sh --local --user
 ```
 
-`install.sh` 也保留了同样能力（并会做依赖检查与安装后自检）：
-
-```bash
-./install.sh --prefix ~/.local     # 等价 make install
-./install.sh                        # 等价 make install-system
-./install.sh --uninstall            # 等价 make uninstall-system
-```
-
-排查提示：TUI 启动时输出区会打印**解析后的 CLI 实际路径**，例如
-`CLI:  /usr/local/bin/gocryptfs-cli`；若它不是新装的那份，可用
-`GOCRYPTFS_CLI=/path/to/shell/gocryptfs-cli gocryptfs-tui` 临时指定。
+若 TUI 调用的不是新装的后端，可用 `GOCRYPTFS_CLI=$(command -v gocryptfs-cli) gocryptfs-tui`
+临时指定；`gocryptfs-tui --print-paths` 可直接看出实际使用的后端与路径。
 
 ### 卸载
 
 ```bash
-# 源码安装（~/.local）
-make uninstall
+# ① 懒人 / ② clone / ③ 手动 都按安装清单精确卸载
+curl -LsSf .../gocryptfs-tui-install.sh | sh -s -- --uninstall --user
+curl -LsSf .../gocryptfs-tui-install.sh | sh -s -- --uninstall --system
+./install.sh --uninstall --user            # 本地已有脚本时
+./install.sh --uninstall --system
 
-# 系统安装（/usr/local，内部按需 sudo）
-make uninstall-system
-
-# 指定前缀
-make uninstall PREFIX=/opt/gocryptfs-tui
-
-# 用 gocryptfs-tui-install.sh 装的（按安装清单精确卸载）
-curl -LsSf .../gocryptfs-tui-install.sh | sh -s -- --uninstall --prefix /usr/local
-
-# 用官方 -installer.sh 装的（0.3.0 起不再写 receipt，没有 uninstall 子命令）
-rm -f ~/.local/bin/gocryptfs-tui
+# 便捷封装
+make uninstall                             # 等价 --user
+make uninstall-system                      # 等价 --system
+make uninstall PREFIX=/opt/gocryptfs-tui   # 指定前缀
 ```
 
-> 三种方式都**不删**配置与数据：配置 `~/.config/gocryptfs-tui/`、
-> 数据 `~/.local/share/gocryptfs-tui/`（含日志、历史、HELP.md、内嵌释放的后端）。
-> 需要彻底清理时自行删除这两个目录。
+> 卸载**不删**配置与数据：配置 `${XDG_CONFIG_HOME:-~/.config}/gocryptfs-tui/`、
+> 数据 `${XDG_DATA_HOME:-~/.local/share}/gocryptfs-tui/`（含日志、历史、HELP.md、
+> 内嵌释放的后端）。需要彻底清理时自行删除这两个目录。
 >
-> `make uninstall` 只删除 `$PREFIX/bin/gocryptfs-tui`、`$PREFIX/bin/gocryptfs-cli`
-> 与 `$PREFIX/lib/gocryptfs-tui/`；`install.sh --uninstall` 优先读安装清单
-> （`INSTALLED.files`）逐条删除，只允许删前缀内的路径，并在命令末尾提示 PATH 中是否仍残留其他安装。
-> 手工清理等价于：
-> `rm -rf <PREFIX>/lib/gocryptfs-tui <PREFIX>/bin/gocryptfs-cli <PREFIX>/bin/gocryptfs-tui`。
+> `install.sh --uninstall` 读 `<prefix>/lib/gocryptfs-tui/INSTALLED.files` 逐条删除，
+> 只允许删前缀内的路径；`make uninstall` 删除 `$PREFIX/bin/gocryptfs-tui`、
+> `$PREFIX/bin/gocryptfs-cli` 与 `$PREFIX/lib/gocryptfs-tui/`。
+>
+> 0.4.x 及更早用 cargo-dist 的 `-installer.sh` 装过的（`~/.cargo/bin` 或 `~/.local/bin`）：
+> `rm -f ~/.local/bin/gocryptfs-tui ~/.cargo/bin/gocryptfs-tui`。
 
 ---
 
@@ -946,12 +896,16 @@ make verify
 
 ### 本地安装
 
+`make install` / `make install-system` 是**模式 ③（源码 + cargo）**的便捷封装：
+
 ```bash
-make install            # 装到 ~/.local（TUI + Shell 后端）
-make install-system     # 装到 /usr/local（按需 sudo）
-make uninstall          # 卸载 ~/.local
-make uninstall-system   # 卸载 /usr/local
+make install            # = ./install.sh --local --user    （~/.local）
+make install-system     # = ./install.sh --local --system  （/usr/local，按需 sudo）
+make uninstall          # = ./install.sh --uninstall --user
+make uninstall-system   # = ./install.sh --uninstall --system
 ```
+
+模式 ①（懒人）/ ②（clone）不需要 cargo，直接用安装脚本即可（见「安装」）。
 
 ### 全部 Make 目标
 

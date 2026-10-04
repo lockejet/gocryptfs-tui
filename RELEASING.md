@@ -132,22 +132,28 @@ printf '%s\n\n## 运行时依赖\n\n- gocryptfs / fusermount(fuse3) / rsync / yq
   | gh release edit v0.3.0 --notes-file -
 ```
 
-同时确认两个安装脚本都在 Release 里，并冒烟一次（不需要源码）：
+确认 Release 里**只有一个**安装脚本（`gocryptfs-tui-install.sh`；cargo-dist 的
+`-installer.sh` 已停用），并冒烟两条路径（都不需要源码/工具链）：
 
 ```bash
-gh release view v0.3.0 --json assets --jq '.assets[].name' | grep -E 'installer\.sh|install\.sh'
+gh release view v0.5.0 --json assets --jq '.assets[].name' | grep -E 'install\.sh|\.tar\.xz$' 
 
+# 用户级
 curl -LsSf https://github.com/lockejet/gocryptfs-tui/releases/latest/download/gocryptfs-tui-install.sh \
-  | sh -s -- --prefix /tmp/gocryptfs-tui-smoke --link-cli
+  | sh -s -- --user --prefix /tmp/gocryptfs-tui-smoke
 /tmp/gocryptfs-tui-smoke/bin/gocryptfs-tui --version
-/tmp/gocryptfs-tui-smoke/bin/gocryptfs-cli --version
+
+# 卸载（按清单）
 curl -LsSf https://github.com/lockejet/gocryptfs-tui/releases/latest/download/gocryptfs-tui-install.sh \
   | sh -s -- --uninstall --prefix /tmp/gocryptfs-tui-smoke
+
+# 系统级（需 sudo；确认装到 /usr/local/bin 且链接 gocryptfs-cli）
+curl -LsSf .../gocryptfs-tui-install.sh | sh -s -- --system
 ```
 
-确认安装落点已切到 `~/.local/bin`（由 CI 在发布时生成安装脚本）：
+再确认一次安装脚本自身可用（POSIX sh、不需要 cargo）：
 
 ```bash
-curl -LsSf https://github.com/lockejet/gocryptfs-tui/releases/latest/download/gocryptfs-tui-installer.sh \
-  | grep -m1 '_install_dir='
+curl -LsSf https://github.com/lockejet/gocryptfs-tui/releases/latest/download/gocryptfs-tui-install.sh \
+  | sh -n /dev/stdin && echo "语法 OK"
 ```
