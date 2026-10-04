@@ -2536,8 +2536,6 @@ fn render_tab_bar(f: &mut Frame, app: &App, area: Rect) {
         Span::styled(t!("tab.create"), tab_style(Page::Create)),
         Span::raw("  "),
         Span::styled(t!("tab.remove"), tab_style(Page::Remove)),
-        Span::raw("      "),
-        Span::styled(t!("tab.hint"), Style::default().fg(Color::Cyan)),
     ]);
     f.render_widget(Paragraph::new(line), area);
 }
@@ -2976,12 +2974,28 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
         Span::raw(t!("statusbar.global_hint")),
     ]);
 
-    let page_hint = match app.page {
+    // 页面行：`Page: [n]` 用黄色（与全局行标签一致），动作提示保持白色
+    let page_actions = match app.page {
         Page::Mount => t!("statusbar.page_mount"),
         Page::Create => t!("statusbar.page_create"),
         Page::Remove => t!("statusbar.page_remove"),
     };
-    let page_line = Line::from(Span::raw(page_hint));
+    let page_no: usize = match app.page {
+        Page::Mount => 1,
+        Page::Create => 2,
+        Page::Remove => 3,
+    };
+    let page_line = Line::from(vec![
+        Span::styled(
+            t!("statusbar.page_label"),
+            Style::default().fg(Color::Yellow),
+        ),
+        Span::styled(
+            t!("statusbar.page_index", page_no),
+            Style::default().fg(Color::Yellow),
+        ),
+        Span::raw(page_actions),
+    ]);
 
     let focus_str = match app.focus {
         Focus::List => t!("focus.list"),

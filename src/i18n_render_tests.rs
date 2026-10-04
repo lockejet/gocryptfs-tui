@@ -1250,3 +1250,70 @@ fn print_paths_report_lists_effective_paths() {
     }
     i18n::set_lang(i18n::Lang::ZhCn);
 }
+
+/// 页签行不再显示分页提示（`page[Tab] or [ ]`）：该信息已在全局行的 `Page[1/2/3] [/]` 里。
+#[test]
+fn tab_bar_has_no_page_hint() {
+    let _guard = lock_lang();
+    for lang in [i18n::Lang::ZhCn, i18n::Lang::EnUs] {
+        i18n::set_lang(lang);
+        let mut app = test_app();
+        let lines = render_lines(&mut app);
+        let tabs = &lines[2];
+        assert!(
+            !has(tabs, "换页") && !has(tabs, "page["),
+            "{} 页签行仍有分页提示: {}",
+            lang.code(),
+            tabs
+        );
+        assert!(
+            has(tabs, "挂载/卸载") || has(tabs, "Mount/unmount"),
+            "{} 页签行内容异常: {}",
+            lang.code(),
+            tabs
+        );
+    }
+    i18n::set_lang(i18n::Lang::ZhCn);
+}
+
+/// 状态栏页面行的 `Page: [n]` 应为黄色（与全局行标签一致），动作提示保持白色。
+#[test]
+fn status_bar_page_label_is_yellow() {
+    let _guard = lock_lang();
+    for lang in [i18n::Lang::ZhCn, i18n::Lang::EnUs] {
+        i18n::set_lang(lang);
+        let mut app = test_app();
+        let backend = TestBackend::new(140, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| ui(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+
+        // 状态栏最后 3 行：37=全局行，38=页面行，39=区域行
+        let page_row = 38;
+        let first = &buffer.content()[buffer.index_of(0, page_row)];
+        assert_eq!(
+            first.fg,
+            Color::Yellow,
+            "{} 页面标签不是黄色: cell={:?}",
+            lang.code(),
+            first.symbol()
+        );
+
+        // 标签+序号之后的动作提示应保持白色
+        let prefix = format!(
+            "{}{}",
+            t!("statusbar.page_label"),
+            t!("statusbar.page_index", 1usize)
+        );
+        let x = Line::from(prefix.as_str()).width() as u16;
+        let cell = &buffer.content()[buffer.index_of(x, page_row)];
+        assert_eq!(
+            cell.fg,
+            Color::White,
+            "{} 动作提示不应改变颜色: {:?}",
+            lang.code(),
+            cell.symbol()
+        );
+    }
+    i18n::set_lang(i18n::Lang::ZhCn);
+}
