@@ -1317,3 +1317,48 @@ fn status_bar_page_label_is_yellow() {
     }
     i18n::set_lang(i18n::Lang::ZhCn);
 }
+
+/// TAB2/TAB3：`Enter` 不再进入创建/删除向导（只有 c / d 可以）。
+#[test]
+fn enter_key_no_longer_opens_wizards() {
+    let _guard = lock_lang();
+    for (page, key) in [(Page::Create, 'c'), (Page::Remove, 'd')] {
+        let mut app = test_app();
+        app.page = page;
+        let before = app.status.clone();
+
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+        assert!(app.wizard.is_none(), "{:?} 页按 Enter 不应进入向导", page);
+        assert_eq!(app.status, before, "{:?} 页按 Enter 不应改变状态", page);
+        assert!(app.task.is_none());
+
+        handle_key(&mut app, KeyCode::Char(key), KeyModifiers::empty());
+        // 进入向导（可能因未选中而给出提示），关键是 Enter 已被移除
+        assert!(
+            app.wizard.is_some() || !app.status.is_empty(),
+            "{:?} 页按 {} 应有反应",
+            page,
+            key
+        );
+    }
+    // 提示文案里不应再出现 c/Enter、d/Enter
+    for lang in [i18n::Lang::ZhCn, i18n::Lang::EnUs] {
+        i18n::set_lang(lang);
+        for key in [
+            "statusbar.page_create",
+            "statusbar.page_remove",
+            "help.tab2_wizard",
+            "help.tab3_wizard",
+        ] {
+            let text = i18n::tr(key);
+            assert!(
+                !text.contains("Enter"),
+                "{} 的 {} 仍提到 Enter: {}",
+                lang.code(),
+                key,
+                text
+            );
+        }
+    }
+    i18n::set_lang(i18n::Lang::ZhCn);
+}

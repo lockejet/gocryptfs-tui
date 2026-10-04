@@ -2212,7 +2212,7 @@ fn handle_key(app: &mut App, key: KeyCode, mods: KeyModifiers) {
                         app.status = t!("status.selected_create").to_string();
                     }
                 }
-                KeyCode::Enter | KeyCode::Char('c') => app.enter_create_wizard(),
+                KeyCode::Char('c') => app.enter_create_wizard(),
                 KeyCode::Char('l') => app.load_dir_view(false),
                 KeyCode::Char('t') => app.load_dir_view(true),
                 _ => {}
@@ -2226,7 +2226,7 @@ fn handle_key(app: &mut App, key: KeyCode, mods: KeyModifiers) {
                         app.status = t!("status.selected_remove").to_string();
                     }
                 }
-                KeyCode::Enter | KeyCode::Char('d') => app.enter_remove_wizard(),
+                KeyCode::Char('d') => app.enter_remove_wizard(),
                 KeyCode::Char('l') => app.load_dir_view(false),
                 KeyCode::Char('t') => app.load_dir_view(true),
                 _ => {}

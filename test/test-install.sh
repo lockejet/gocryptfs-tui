@@ -120,21 +120,21 @@ check "--user 等价默认落点" "yes" "$(exists "$FAKEHOME2/.local/bin/gocrypt
 # ---- 6. 模式自动判断 ----
 # 5.1 管道执行（无源码树）→ 必须走 Release，绝不能尝试编译
 out="$(GOCRYPTFS_TUI_REPO=nonexistent/none cat "$INSTALL" | sh -s -- --prefix "$TMP/mode-release" 2>&1 || true)"
-case "$out" in *"安装来源: Release"*) v=1 ;; *) v=0 ;; esac
+case "$out" in *"source: Release"*) v=1 ;; *) v=0 ;; esac
 check "管道执行默认走 Release" "1" "$v"
-case "$out" in *"编译 gocryptfs-tui"*) v=0 ;; *) v=1 ;; esac
+case "$out" in *"building gocryptfs-tui"*) v=0 ;; *) v=1 ;; esac
 check "管道执行不会尝试编译" "1" "$v"
 
 # 5.2 仓库内执行 → 本地模式；没有 cargo 时给出可操作提示
 out="$(cd "$PROJECT_ROOT" && env PATH=/usr/bin:/bin sh "$INSTALL" --prefix "$TMP/mode-local" 2>&1 || true)"
-case "$out" in *"未找到 cargo"*) v=1 ;; *) v=0 ;; esac
+case "$out" in *"cargo was not found"*) v=1 ;; *) v=0 ;; esac
 check "本地模式缺 cargo 时给出提示" "1" "$v"
 case "$out" in *"--from-release"*) v=1 ;; *) v=0 ;; esac
 check "提示里给出 --from-release 用法" "1" "$v"
 
 # 5.3 显式 --local 优先于自动判断（即使管道执行）
 out="$(cat "$INSTALL" | sh -s -- --local --no-build --prefix "$TMP/mode-forced" --no-deps-check 2>&1 || true)"
-case "$out" in *"安装来源: 本地源码"*) v=1 ;; *) v=0 ;; esac
+case "$out" in *"source: local build"*) v=1 ;; *) v=0 ;; esac
 check "--local 强制本地模式" "1" "$v"
 
 # 6.3 源码树里没有产物也没有 cargo → 自动回退 Release（不再因缺 cargo 失败）
@@ -144,26 +144,36 @@ mkdir -p "$FAKEREPO/src"
 : > "$FAKEREPO/src/main.rs"
 cp "$INSTALL" "$FAKEREPO/install.sh"
 out="$(cd "$FAKEREPO" && env PATH=/usr/bin:/bin GOCRYPTFS_TUI_REPO=nonexistent/none sh ./install.sh --prefix "$TMP/fallback" 2>&1 || true)"
-case "$out" in *"自动改用 Release"*) v=1 ;; *) v=0 ;; esac
+case "$out" in *"using the Release binary"*) v=1 ;; *) v=0 ;; esac
 check "无 cargo 时自动回退 Release" "1" "$v"
-case "$out" in *"本地模式需要 Rust 工具链"*) v=0 ;; *) v=1 ;; esac
+case "$out" in *"local mode needs the Rust toolchain"*) v=0 ;; *) v=1 ;; esac
 check "回退时不报致命 cargo 错误" "1" "$v"
 
 # 6.4 clone 模式默认取当前 checkout 的 tag
 tag="$(git -C "$PROJECT_ROOT" describe --tags --abbrev=0 2>/dev/null || true)"
 if [ -n "$tag" ]; then
     out="$(cd "$PROJECT_ROOT" && GOCRYPTFS_TUI_REPO=nonexistent/none sh "$INSTALL" --from-release --prefix "$TMP/tagver" 2>&1 || true)"
-    case "$out" in *"Release（$tag,"*) v=1 ;; *) v=0 ;; esac
+    case "$out" in *"source: Release ($tag,"*) v=1 ;; *) v=0 ;; esac
     check "clone 模式默认版本为当前 tag ($tag)" "1" "$v"
 fi
 
 # ---- 7. 参数解析：--version 需要版本号；未知参数报错 ----
 out="$(sh "$INSTALL" --version 2>&1 >/dev/null || true)"
-case "$out" in *"需要版本号"*) v=1 ;; *) v=0 ;; esac
+case "$out" in *"needs a version"*) v=1 ;; *) v=0 ;; esac
 check "--version 缺版本号报错" "1" "$v"
 out="$(sh "$INSTALL" --bogus 2>&1 || true)"
-case "$out" in *"未知参数"*) v=1 ;; *) v=0 ;; esac
+case "$out" in *"unknown argument"*) v=1 ;; *) v=0 ;; esac
 check "未知参数报错" "1" "$v"
+
+# ---- 8. 输出必须全英文（提示不随 locale 变化）----
+out="$(sh "$INSTALL" --help 2>&1)"
+if printf '%s' "$out" | LC_ALL=C grep -qP '\p{Han}'; then v=0; else v=1; fi
+check "--help 输出无中文" "1" "$v"
+
+rm -rf "$TMP/en"
+out="$(sh "$INSTALL" --prefix "$TMP/en" --no-build --no-deps-check 2>&1; sh "$INSTALL" --uninstall --prefix "$TMP/en" 2>&1)"
+if printf '%s' "$out" | LC_ALL=C grep -qP '\p{Han}'; then v=0; else v=1; fi
+check "安装/卸载输出无中文" "1" "$v"
 
 echo ""
 echo "===== 结果 ====="

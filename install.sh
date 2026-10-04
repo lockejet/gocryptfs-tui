@@ -23,43 +23,42 @@ DEPS_CHECK=1
 
 usage() {
     cat <<'USAGE_EOF'
-install.sh — 安装 / 卸载 gocryptfs-tui（TUI 二进制 + Shell 后端）
+install.sh — install / uninstall gocryptfs-tui (TUI binary + shell backend)
 
-用法（三种模式共用一个脚本）：
-  懒人    curl -LsSf <release>/gocryptfs-tui-install.sh | sh -s -- [--user|--system]
+Usage (one script, three modes):
+  lazy    curl -LsSf <release>/gocryptfs-tui-install.sh | sh -s -- [--user|--system]
   clone   git clone … && ./install.sh --from-release [--user|--system]
-  手动    git clone … && make build && ./install.sh --local [--user|--system]
+  source  git clone … && make build && ./install.sh --local [--user|--system]
 
-落点（默认 --user）：
-  --user              装到 ~/.local（默认；无需 sudo）
-  --system            装到 /usr/local，并默认链接独立 CLI（按需 sudo）
-  --prefix DIR        指定前缀
+Prefix (default: --user):
+  --user              install to ~/.local (default; no sudo)
+  --system            install to /usr/local and link the standalone CLI (sudo as needed)
+  --prefix DIR        custom prefix
 
-模式与卸载：
-  ./install.sh --local                 强制本地源码模式（需要 cargo）
-  ./install.sh --from-release          不编译：从 GitHub Release 下载当前平台二进制
-  ./install.sh --from-release v0.4.2   指定版本（等价 --version v0.4.2）
-  ./install.sh --uninstall             按安装清单卸载
-  ./install.sh --no-build              跳过编译，直接用已有产物安装
-  ./install.sh --link-cli              把 gocryptfs-cli 软链到 <prefix>/bin
-  ./install.sh --no-link-cli           即使 --system 也不链接
-  ./install.sh --no-deps-check         跳过安装后的运行时依赖检查
+Mode and uninstall:
+  ./install.sh --local                 force local-source mode (needs cargo)
+  ./install.sh --from-release          no build: fetch the platform binary from GitHub Releases
+  ./install.sh --from-release v0.4.2   pin a version (same as --version v0.4.2)
+  ./install.sh --uninstall             uninstall using the install manifest
+  ./install.sh --no-build              skip compilation, use existing artifacts
+  ./install.sh --link-cli              symlink gocryptfs-cli into <prefix>/bin
+  ./install.sh --no-link-cli           never link, even with --system
+  ./install.sh --no-deps-check         skip the post-install dependency check
 
-  # 不需要源码/工具链时（Release 附件）：
+  # no source/toolchain needed (GitHub Release asset):
   curl -LsSf https://github.com/lockejet/gocryptfs-tui/releases/latest/download/gocryptfs-tui-install.sh \
     | sh -s -- --system
 
-模式默认自动判断：`curl … | sh`（无源码树）→ 从 Release 安装；
-在源码仓库里执行 `./install.sh` → 本地编译。可用 `--local` / `--from-release` 强制。
-
-兼容 POSIX sh（dash），因此 `curl ... | sh` 可以直接用。
+The mode is auto-detected: `curl … | sh` (no source tree) installs from the Release;
+running `./install.sh` inside a checkout builds locally. Force with --local / --from-release.
+POSIX sh (dash) compatible, so `curl ... | sh` works as-is.
 USAGE_EOF
 }
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --uninstall|-u)  UNINSTALL=1 ;;
-        --prefix)        PREFIX="${2:?--prefix 需要目录}"; shift ;;
+        --prefix)        PREFIX="${2:?--prefix needs a directory}"; shift ;;
         --prefix=*)      PREFIX="${1#--prefix=}" ;;
         --user)          PREFIX="$HOME/.local" ;;
         --system)        PREFIX="/usr/local"
@@ -68,8 +67,8 @@ while [ $# -gt 0 ]; do
         --from-release)  FROM_RELEASE=1; MODE="release"
                          case "${2:-}" in v[0-9]*) RELEASE_VER="$2"; shift ;; esac ;;
         --from-release=*) FROM_RELEASE=1; MODE="release"; RELEASE_VER="${1#--from-release=}" ;;
-        --version|-V)    RELEASE_VER="${2:?--version 需要版本号，如 v0.3.0}"; FROM_RELEASE=1; MODE="release"; shift ;;
-        --release-version) RELEASE_VER="${2:?--release-version 需要版本号}"; MODE="release"; shift ;;
+        --version|-V)    RELEASE_VER="${2:?--version needs a version, e.g. v0.4.2}"; FROM_RELEASE=1; MODE="release"; shift ;;
+        --release-version) RELEASE_VER="${2:?--release-version needs a version}"; MODE="release"; shift ;;
         --local)         MODE="local" ;;
         --no-build)      DO_BUILD=0
                          if [ -z "$MODE" ]; then MODE="local"; fi ;;
@@ -77,13 +76,13 @@ while [ $# -gt 0 ]; do
         --no-link-cli)   LINK_CLI=0; LINK_CLI_SET=1 ;;
         --no-deps-check) DEPS_CHECK=0 ;;
         -h|--help)       usage; exit 0 ;;
-        *) echo "[!] 未知参数: $1" >&2; usage >&2; exit 2 ;;
+        *) echo "[!] unknown argument: $1" >&2; usage >&2; exit 2 ;;
     esac
     shift
 done
 
 case "$PREFIX" in
-    ""|"/") echo "[!] 非法的 PREFIX: '${PREFIX}'" >&2; exit 1 ;;
+    ""|"/") echo "[!] invalid PREFIX: '${PREFIX}'" >&2; exit 1 ;;
 esac
 PREFIX="${PREFIX%/}"
 
@@ -100,7 +99,7 @@ fi
 # 只删除固定的 gocryptfs-tui 目录，避免误删
 case "$LIBDIR" in
     */lib/gocryptfs-tui) ;;
-    *) echo "[!] 拒绝操作异常路径: $LIBDIR" >&2; exit 1 ;;
+    *) echo "[!] refusing to operate on unexpected path: $LIBDIR" >&2; exit 1 ;;
 esac
 
 # ---- 仅在目标不可写时提权 ----
@@ -111,12 +110,12 @@ done
 SUDO=""
 if [ ! -w "$probe" ]; then
     if [ "$(id -u)" -eq 0 ]; then
-        echo "[!] 检测到以 root 运行；本脚本需要普通用户身份运行。" >&2
-        echo "    正确用法: ./install.sh（脚本内部会按需 sudo）" >&2
+        echo "[!] running as root; this script must run as a normal user." >&2
+        echo "    correct usage: ./install.sh (it uses sudo internally when needed)" >&2
         exit 1
     fi
     command -v sudo >/dev/null 2>&1 || {
-        echo "[!] $PREFIX 不可写且未安装 sudo" >&2
+        echo "[!] $PREFIX is not writable and sudo is not installed" >&2
         exit 1
     }
     SUDO="sudo"
@@ -140,7 +139,7 @@ download() { # download <url> <dest>
     elif have wget; then
         wget -qO "$2" "$1"
     else
-        echo "[!] 需要 curl 或 wget 才能 --from-release" >&2
+        echo "[!] --from-release requires curl or wget" >&2
         return 1
     fi
 }
@@ -151,25 +150,25 @@ json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 # 卸载：优先按安装清单精确删除
 # ------------------------------------------------------------
 if [ "$UNINSTALL" -eq 1 ]; then
-    echo "==> 卸载 (PREFIX=$PREFIX)"
+    echo "==> uninstalling (PREFIX=$PREFIX)"
     removed=0
     if [ -f "$MANIFEST_FILES" ]; then
-        echo "    按清单: $MANIFEST_FILES"
+        echo "    using manifest: $MANIFEST_FILES"
         while IFS= read -r f; do
             [ -n "$f" ] || continue
             case "$f" in
                 "$PREFIX"/*) ;;   # 只允许删除前缀内的路径
-                *) echo "[!] 跳过清单外的路径: $f" >&2; continue ;;
+                *) echo "[!] skipping path outside prefix: $f" >&2; continue ;;
             esac
             if [ -e "$f" ] || [ -L "$f" ]; then
                 priv rm -f "$f"
-                echo "  删除 $f"
+                echo "  removed $f"
                 removed=1
             fi
         done < "$MANIFEST_FILES"
         priv rm -f "$MANIFEST" "$MANIFEST_FILES"
     else
-        echo "    （未找到安装清单，按默认路径卸载）"
+        echo "    (no install manifest found; using default paths)"
     fi
     # 无论有无清单都清理已知路径，并删除空的 lib 目录
     priv rm -f "$BINDIR/gocryptfs-cli" "$BINDIR/gocryptfs-tui"
@@ -177,19 +176,19 @@ if [ "$UNINSTALL" -eq 1 ]; then
     # 只在确认为空时才删父目录（非空会失败，不影响其它文件）
     priv rmdir "$PREFIX/lib" >/dev/null 2>&1 || true
     priv rmdir "$BINDIR" >/dev/null 2>&1 || true
-    echo "[✔] 已卸载："
+    echo "[OK] uninstalled:"
     echo "  $BINDIR/gocryptfs-tui"
     echo "  $BINDIR/gocryptfs-cli"
     echo "  $LIBDIR"
     echo ""
-    echo "[·] 配置与数据目录未删除（按需自行清理）："
+    echo "[i] config and data directories were kept (remove them manually if needed):"
     echo "  ${XDG_CONFIG_HOME:-$HOME/.config}/gocryptfs-tui/"
     echo "  ${XDG_DATA_HOME:-$HOME/.local/share}/gocryptfs-tui/"
     remaining="$(command -v gocryptfs-cli 2>/dev/null || true)"
     if [ -n "$remaining" ]; then
         echo ""
-        echo "[!] PATH 中仍能解析到: $remaining"
-        echo "    若那是另一份旧安装，建议一并卸载，避免 TUI 调用到旧后端。"
+        echo "[!] PATH still resolves to: $remaining"
+        echo "    if that is another/older install, uninstall it too to avoid a stale backend."
     fi
     exit 0
 fi
@@ -198,16 +197,16 @@ fi
 # 安装
 # ------------------------------------------------------------
 # ---- 运行时依赖（仅警告；真正的判定交给 TUI 的 --check-deps）----
-echo "==> 检查依赖"
+echo "==> checking dependencies"
 missing_deps=""
 for cmd in gocryptfs fusermount rsync yq jq mountpoint; do
     have "$cmd" || missing_deps="$missing_deps $cmd"
 done
 if [ -n "$missing_deps" ]; then
-    echo "[!] 缺少运行时依赖:${missing_deps}"
-    echo "    安装会继续；装完后按 'gocryptfs-tui --check-deps' 的提示补齐即可。"
+    echo "[!] missing runtime dependencies:${missing_deps}"
+    echo "    continuing; install the missing ones as suggested by 'gocryptfs-tui --check-deps'."
 else
-    echo "[✔] 依赖齐全"
+    echo "[OK] dependencies present"
 fi
 
 # ---- 模式自动判断 ----
@@ -222,7 +221,7 @@ if [ -z "$MODE" ]; then
     else
         MODE="release"
         if [ "$IN_REPO" -eq 1 ]; then
-            echo "[·] 未找到 cargo 与 target/release，自动改用 Release 二进制（--local 可强制本地编译）"
+            echo "[i] no cargo and no target/release found; using the Release binary (use --local to force a local build)"
         fi
     fi
 fi
@@ -241,7 +240,7 @@ if [ "$FROM_RELEASE" -eq 1 ]; then
     case "$(uname -m)" in
         x86_64|amd64)   arch="x86_64" ;;
         aarch64|arm64)  arch="aarch64" ;;
-        *) echo "[!] 不支持的架构: $(uname -m)" >&2; exit 1 ;;
+        *) echo "[!] unsupported architecture: $(uname -m)" >&2; exit 1 ;;
     esac
     if have ldd && ldd --version 2>&1 | grep -qi musl; then libc="musl"; else libc="gnu"; fi
     target="${arch}-unknown-linux-${libc}"
@@ -262,59 +261,59 @@ if [ "$FROM_RELEASE" -eq 1 ]; then
         [ -n "$ver_label" ] || ver_label="latest"
     fi
 
-    echo "==> 安装来源: Release（$ver_label, $target）"
+    echo "==> source: Release ($ver_label, $target)"
     if ! download "$base/$asset" "$DL/$asset"; then
-        echo "[!] 下载失败: $base/$asset" >&2
-        echo "    可手动下载: https://github.com/$REPO/releases" >&2
+        echo "[!] download failed: $base/$asset" >&2
+        echo "    download manually: https://github.com/$REPO/releases" >&2
         exit 1
     fi
     if download "$base/$asset.sha256" "$DL/$asset.sha256" 2>/dev/null; then
         ( cd "$DL" && sha256sum -c "$asset.sha256" >/dev/null ) \
-            || { echo "[!] sha256 校验失败: $asset" >&2; exit 1; }
-        echo "[✔] sha256 校验通过"
+            || { echo "[!] sha256 verification failed: $asset" >&2; exit 1; }
+        echo "[OK] sha256 verified"
     else
-        echo "[!] 未取到 .sha256，跳过校验" >&2
+        echo "[!] no .sha256 available; skipping verification" >&2
     fi
     tar -xJf "$DL/$asset" -C "$DL"
     BIN_SRC="$DL/${asset%.tar.xz}/gocryptfs-tui"
-    [ -f "$BIN_SRC" ] || { echo "[!] 归档里没有 gocryptfs-tui" >&2; exit 1; }
+    [ -f "$BIN_SRC" ] || { echo "[!] archive does not contain gocryptfs-tui" >&2; exit 1; }
 
     # 独立后端：从同一 Release 的源码包取 shell/
-    echo "==> 获取 Shell 后端（source.tar.gz）"
+    echo "==> fetching the shell backend (source.tar.gz)"
     if download "$base/source.tar.gz" "$DL/source.tar.gz"; then
         if download "$base/source.tar.gz.sha256" "$DL/source.tar.gz.sha256" 2>/dev/null; then
             ( cd "$DL" && sha256sum -c "source.tar.gz.sha256" >/dev/null ) \
-                || { echo "[!] source.tar.gz 校验失败" >&2; exit 1; }
+                || { echo "[!] source.tar.gz verification failed" >&2; exit 1; }
         fi
         tar -xzf "$DL/source.tar.gz" -C "$DL"
         SHELL_DIR="$(find "$DL" -maxdepth 2 -type d -name shell | head -1)"
     fi
     if [ -z "$SHELL_DIR" ] || [ ! -f "$SHELL_DIR/gocryptfs-cli" ]; then
-        echo "[!] 未能从源码包取到 shell/，将只安装 TUI（独立 CLI 缺失）" >&2
+        echo "[!] could not extract shell/ from the source archive; installing the TUI only (no standalone CLI)" >&2
         SHELL_DIR=""
     fi
     SOURCE_DESC="release:$ver_label"
 else
     if [ "$DO_BUILD" -eq 1 ]; then
         if ! have cargo; then
-            echo "[!] 本地模式需要 Rust 工具链，但未找到 cargo。" >&2
-            echo "    没有源码/工具链时请从 Release 安装：" >&2
+            echo "[!] local mode needs the Rust toolchain, but cargo was not found." >&2
+            echo "    without source/toolchain, install from the Release:" >&2
             echo "      curl -LsSf https://github.com/$REPO/releases/latest/download/gocryptfs-tui-install.sh \\" >&2
             echo "        | sh -s -- --from-release --system" >&2
             exit 1
         fi
-        echo "==> 编译 gocryptfs-tui（本地源码模式）"
+        echo "==> building gocryptfs-tui (local source mode)"
         cargo build --release
     else
-        echo "==> 跳过编译（--no-build）"
+        echo "==> skipping build (--no-build)"
     fi
     BIN_SRC="target/release/gocryptfs-tui"
     SHELL_DIR="shell"
     SOURCE_DESC="local:$BIN_SRC"
-    echo "==> 安装来源: 本地源码（$BIN_SRC）"
-    [ -f "$BIN_SRC" ] || { echo "[!] 未找到 $BIN_SRC（先 make build 或去掉 --no-build）" >&2; exit 1; }
+    echo "==> source: local build ($BIN_SRC)"
+    [ -f "$BIN_SRC" ] || { echo "[!] $BIN_SRC not found (run make build first, or drop --no-build)" >&2; exit 1; }
     if [ ! -f "$SHELL_DIR/gocryptfs-cli" ] || [ ! -f "$SHELL_DIR/lib/gocryptfs-lib.sh" ]; then
-        echo "[!] 缺少 shell/ 或 shell/lib/（需要 gocryptfs-lib.sh 与 i18n.sh）" >&2
+        echo "[!] shell/ or shell/lib/ is missing (gocryptfs-lib.sh and i18n.sh are required)" >&2
         exit 1
     fi
 fi
@@ -323,7 +322,7 @@ BIN_VERSION="$("$BIN_SRC" --version 2>/dev/null | sed -n 's/^gocryptfs-tui //p' 
 [ -n "$BIN_VERSION" ] || BIN_VERSION="$SOURCE_DESC"
 
 # ---- 清理旧安装并安装 ----
-echo "==> 安装到 $PREFIX"
+echo "==> installing to $PREFIX"
 priv mkdir -p "$LIBDIR/lib" "$BINDIR"
 priv rm -rf "$LIBDIR"
 priv mkdir -p "$LIBDIR/lib"
@@ -354,7 +353,7 @@ if [ "$LINK_CLI" = "1" ] && [ -n "$SHELL_DIR" ]; then
     priv ln -sf "$LIBDIR/gocryptfs-cli" "$BINDIR/gocryptfs-cli"
     record "$BINDIR/gocryptfs-cli"
 elif [ "$LINK_CLI" = "1" ]; then
-    echo "[!] 没有独立后端可链接（--from-release 未取到 shell/）"
+    echo "[!] nothing to link: no standalone backend (shell/ was not fetched)"
 fi
 
 # ---- 写安装清单（供 --uninstall 精确删除）----
@@ -382,70 +381,70 @@ priv cp -f "$STAGE/files" "$MANIFEST_FILES"
 
 # ---- 自检 ----
 echo ""
-echo "==> 自检"
+echo "==> self-check"
 if [ -n "$SHELL_DIR" ]; then
     if "$LIBDIR/gocryptfs-cli" --help 2>&1 | grep -q -- '--lang'; then
-        echo "[✔] Shell 后端支持 --lang（i18n 已启用）"
+        echo "[OK] shell backend supports --lang (i18n enabled)"
     else
-        echo "[!] Shell 后端未提供 --lang，请确认复制的是最新 shell/lib/"
+        echo "[!] shell backend does not provide --lang; make sure shell/lib/ is up to date"
     fi
 fi
 if [ "$LINK_CLI" = "1" ] && [ -n "$SHELL_DIR" ]; then
     resolved="$(command -v gocryptfs-cli 2>/dev/null || true)"
     if [ -z "$resolved" ]; then
-        echo "[!] PATH 中没有 gocryptfs-cli；请把 $BINDIR 加入 PATH"
+        echo "[!] gocryptfs-cli is not on PATH; add $BINDIR to PATH"
     elif [ "$resolved" != "$BINDIR/gocryptfs-cli" ]; then
-        echo "[!] PATH 优先解析到: $resolved"
-        echo "    不是本次安装的 $BINDIR/gocryptfs-cli，可能调用到旧后端（语言/文案不一致）"
+        echo "[!] PATH resolves to: $resolved"
+        echo "    which is not this install's $BINDIR/gocryptfs-cli; a stale backend may be used"
     else
-        echo "[✔] PATH 解析到本次安装的 gocryptfs-cli"
+        echo "[OK] PATH resolves to this install's gocryptfs-cli"
     fi
 elif [ -n "$SHELL_DIR" ]; then
-    echo "[·] 未链接 gocryptfs-cli 到 PATH（默认行为）。规范位置:"
+    echo "[i] gocryptfs-cli is not linked into PATH (default). Canonical location:"
     echo "      $LIBDIR/gocryptfs-cli"
-    echo "    想直接用命令行版可执行："
+    echo "    to use the CLI directly, run:"
     echo "      ln -sf $LIBDIR/gocryptfs-cli $BINDIR/gocryptfs-cli"
-    echo "      （TUI 用的是内嵌后端，不需要这一步）"
+    echo "      (the TUI uses its embedded backend; this step is optional)"
 fi
 
 if [ "$DEPS_CHECK" -eq 1 ]; then
     echo ""
-    echo "==> 运行时依赖检查"
+    echo "==> runtime dependency check"
     if "$BINDIR/gocryptfs-tui" --check-deps; then
         :
     else
         rc=$?
         if [ "$rc" -eq 1 ]; then
             echo ""
-            echo "[!] 缺少运行时依赖，请按上面的安装命令补齐后再运行 gocryptfs-tui"
+            echo "[!] missing runtime dependencies; install them as shown above before running gocryptfs-tui"
         elif [ -n "$SHELL_DIR" ]; then
             # 旧版二进制不认识 --check-deps：退回 Shell 后端的检查
-            echo "[·] 该 TUI 二进制不支持 --check-deps，改用 Shell 后端检查"
+            echo "[i] this TUI binary does not support --check-deps; falling back to the shell backend"
             "$LIBDIR/gocryptfs-cli" --check-deps \
-                || echo "[!] 缺少运行时依赖，请按上面的提示安装"
+                || echo "[!] missing runtime dependencies; install them as shown above"
         fi
     fi
 fi
 
 echo ""
-echo "[✔] 安装完成（来源: $SOURCE_DESC，版本: $BIN_VERSION）"
+echo "[OK] installed (source: $SOURCE_DESC, version: $BIN_VERSION)"
 echo "  TUI:  $BINDIR/gocryptfs-tui"
 if [ "$LINK_CLI" = "1" ] && [ -n "$SHELL_DIR" ]; then
     echo "  CLI:  $BINDIR/gocryptfs-cli -> $LIBDIR/gocryptfs-cli"
 elif [ -n "$SHELL_DIR" ]; then
-    echo "  CLI:  $LIBDIR/gocryptfs-cli（未链接到 PATH；加 --link-cli 可链接）"
+    echo "  CLI:  $LIBDIR/gocryptfs-cli (not linked into PATH; add --link-cli to link)"
 else
-    echo "  CLI:  （仅内嵌后端，首次运行 TUI 时释放到数据目录）"
+    echo "  CLI:  (embedded backend only; extracted to the data dir on first run)"
 fi
-echo "  清单: $MANIFEST"
+echo "  manifest: $MANIFEST"
 echo ""
-echo "==> 文件清单"
+echo "==> installed files"
 find "$LIBDIR" -type f | sort
 echo ""
-echo "直接运行:  gocryptfs-tui"
+echo "Run:  gocryptfs-tui"
 if [ -f "$0" ] && [ -r "$0" ]; then
-    echo "卸载:      $0 --uninstall --prefix $PREFIX"
+    echo "Uninstall: $0 --uninstall --prefix $PREFIX"
 else
-    echo "卸载:      curl -LsSf https://github.com/$REPO/releases/latest/download/gocryptfs-tui-install.sh \\"
+    echo "Uninstall: curl -LsSf https://github.com/$REPO/releases/latest/download/gocryptfs-tui-install.sh \\"
     echo "             | sh -s -- --uninstall --prefix $PREFIX"
 fi
