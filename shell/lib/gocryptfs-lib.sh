@@ -34,8 +34,21 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     exit 0
 fi
 
-# § 1. 常量
-LOG_FILE="${LOG_FILE:-$HOME/.local/share/gocryptfs-tui/app.log.jsonl}"
+# § 1. 常量（XDG 优先；GOCRYPTFS_* / 旧变量兼容）
+# 显式传入的 LOG_FILE/HISTORY_FILE（例如 TUI 传给子进程）优先，其余跟随 DATA_DIR。
+LOG_FILE_ENV="${LOG_FILE:-}"
+HISTORY_FILE_ENV="${HISTORY_FILE:-}"
+DATA_DIR="${GOCRYPTFS_DATA_DIR:-${DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/gocryptfs-tui}}"
+
+# 重新计算日志/历史路径。
+# 必须在解析完 -D/--data-dir 之后再调用一次：lib 在 source 时还不知道参数。
+apply_data_dir() {
+    DATA_DIR="${DATA_DIR:-${GOCRYPTFS_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/gocryptfs-tui}}"
+    LOG_FILE="${LOG_FILE_ENV:-$DATA_DIR/app.log.jsonl}"
+    HISTORY_FILE="${HISTORY_FILE_ENV:-$DATA_DIR/history.jsonl}"
+    export DATA_DIR LOG_FILE HISTORY_FILE
+}
+apply_data_dir
 LOCK_FILE="${LOCK_FILE:-/tmp/gocryptfs-tui.lock}"
 EXIT_OK=0; EXIT_ERROR=1; EXIT_PASSWORD=2; EXIT_STATE=3
 EXIT_MOUNTPOINT=4; EXIT_NOSPACE=5; EXIT_UMOUNT=6

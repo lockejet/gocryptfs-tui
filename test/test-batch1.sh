@@ -159,6 +159,29 @@ out="$(bash "$CLI" -c "$CONFIG" log --limit 2>&1 >/dev/null)"
 case "$out" in *"需要一个值"*) v=1 ;; *) v=0 ;; esac
 check "选项缺值报错明确（--limit）" "1" "$v"
 
+# 18. CLI 与 TUI 的全局选项对齐：-V/--version
+out="$(env LC_ALL=C bash "$CLI" -V 2>&1)"
+case "$out" in gocryptfs-cli\ *) v=1 ;; *) v=0 ;; esac
+check "-V 打印 gocryptfs-cli 版本行" "1" "$v"
+
+# 19. -D/--data-dir 决定日志位置（与 TUI 的 -D 同义）
+out="$(env LC_ALL=C bash "$CLI" -D /tmp/gocryptfs-tui-dtest log 2>&1 | head -1)"
+case "$out" in *"/tmp/gocryptfs-tui-dtest/app.log.jsonl"*) v=1 ;; *) v=0 ;; esac
+check "-D 决定日志路径" "1" "$v"
+
+# 20. XDG_CONFIG_HOME 生效（无 -c 时）
+out="$(env LC_ALL=C XDG_CONFIG_HOME=/tmp/gocryptfs-tui-xdg bash "$CLI" config 2>&1)"
+check "XDG_CONFIG_HOME 生效" "/tmp/gocryptfs-tui-xdg/gocryptfs-tui/config.yaml" "$out"
+
+# 21. 兼容旧变量 CONFIG_FILE
+out="$(env LC_ALL=C CONFIG_FILE=/tmp/legacy-config.yaml bash "$CLI" config 2>&1)"
+check "CONFIG_FILE 兼容" "/tmp/legacy-config.yaml" "$out"
+
+# 22. -D 缺值报错明确
+out="$(env LC_ALL=C bash "$CLI" -D 2>&1 >/dev/null)"
+case "$out" in *"需要目录"*) v=1 ;; *) v=0 ;; esac
+check "-D 缺值报错明确" "1" "$v"
+
 echo "===== 结果 ====="
 echo "PASS: $PASS"
 echo "FAIL: $FAIL"

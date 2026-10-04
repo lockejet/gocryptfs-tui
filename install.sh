@@ -7,19 +7,24 @@
 #   ./install.sh --uninstall         卸载（默认 /usr/local）
 #   ./install.sh --uninstall --prefix ~/.local
 #   ./install.sh --no-build          跳过编译，直接用已有产物安装
+#   ./install.sh --link-cli          额外把 gocryptfs-cli 软链到 <prefix>/bin（默认不链）
 #
 # 说明：
 #   * TUI 与 Shell 后端必须成套安装，否则 TUI 可能调用到旧版 gocryptfs-cli，
 #     出现「界面已是英文、输出区仍是中文」这类不一致。
+#   * TUI 默认使用**内嵌**后端（首启释放到 <data-dir>/backend）；本脚本安装的
+#     gocryptfs-cli 是给"只想用命令行/想固定一份独立后端"的场景准备的，
+#     三种安装方式下它的规范位置与用法一致（见 README「安装」）。
 #   * 目标不可写时才使用 sudo；请勿直接用 sudo 运行本脚本（会用你的 cargo 编译）。
 set -euo pipefail
 
 PREFIX="${PREFIX:-/usr/local}"
 DO_BUILD=1
 UNINSTALL=0
+LINK_CLI="${LINK_CLI:-0}"
 
 usage() {
-    sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 while [ $# -gt 0 ]; do
@@ -28,6 +33,7 @@ while [ $# -gt 0 ]; do
         --prefix)        PREFIX="${2:?--prefix 需要目录}"; shift ;;
         --prefix=*)      PREFIX="${1#--prefix=}" ;;
         --no-build)      DO_BUILD=0 ;;
+        --link-cli)      LINK_CLI=1 ;;
         -h|--help)       usage; exit 0 ;;
         *) echo "[!] 未知参数: $1" >&2; usage >&2; exit 2 ;;
     esac
@@ -135,7 +141,16 @@ priv cp -f "$STAGE"/*.sh "$LIBDIR/lib/"
 priv cp -f "$STAGE/gocryptfs-cli" "$LIBDIR/gocryptfs-cli"
 priv cp -f target/release/gocryptfs-tui "$BINDIR/gocryptfs-tui"
 priv chmod 0755 "$BINDIR/gocryptfs-tui" "$LIBDIR/gocryptfs-cli"
-priv ln -sf "$LIBDIR/gocryptfs-cli" "$BINDIR/gocryptfs-cli"
+# 版本文件：gocryptfs-cli 从自身目录读取，用于 --version
+"$BINDIR/gocryptfs-tui" --version 2>/dev/null \
+    | sed -n 's/^gocryptfs-tui //p' > "$STAGE/VERSION" || true
+priv cp -f "$STAGE/VERSION" "$LIBDIR/VERSION"
+if [ "$LINK_CLI" = "1" ]; then
+    priv ln -sf "$LIBDIR/gocryptfs-cli" "$BINDIR/gocryptfs-cli"
+    echo "[✔] 已把 gocryptfs-cli 链接到 $BINDIR/gocryptfs-cli"
+else
+    priv rm -f "$BINDIR/gocryptfs-cli"
+fi
 
 # ---- 自检 ----
 echo ""
@@ -145,14 +160,22 @@ if "$BINDIR/gocryptfs-cli" --help 2>&1 | grep -q -- '--lang'; then
 else
     echo "[!] Shell 后端未提供 --lang，请确认复制的是最新 shell/lib/"
 fi
-resolved="$(command -v gocryptfs-cli 2>/dev/null || true)"
-if [ -z "$resolved" ]; then
-    echo "[!] PATH 中没有 gocryptfs-cli；请把 $BINDIR 加入 PATH"
-elif [ "$resolved" != "$BINDIR/gocryptfs-cli" ]; then
-    echo "[!] PATH 优先解析到: $resolved"
-    echo "    不是本次安装的 $BINDIR/gocryptfs-cli，TUI 可能调用到旧后端（语言/文案不一致）"
+if [ "$LINK_CLI" = "1" ]; then
+    resolved="$(command -v gocryptfs-cli 2>/dev/null || true)"
+    if [ -z "$resolved" ]; then
+        echo "[!] PATH 中没有 gocryptfs-cli；请把 $BINDIR 加入 PATH"
+    elif [ "$resolved" != "$BINDIR/gocryptfs-cli" ]; then
+        echo "[!] PATH 优先解析到: $resolved"
+        echo "    不是本次安装的 $BINDIR/gocryptfs-cli，可能调用到旧后端（语言/文案不一致）"
+    else
+        echo "[✔] PATH 解析到本次安装的 gocryptfs-cli"
+    fi
 else
-    echo "[✔] PATH 解析到本次安装的 gocryptfs-cli"
+    echo "[·] 未链接 gocryptfs-cli 到 PATH（默认行为）。规范位置:"
+    echo "      $LIBDIR/gocryptfs-cli"
+    echo "    想直接用命令行版可执行："
+    echo "      ln -sf $LIBDIR/gocryptfs-cli $BINDIR/gocryptfs-cli"
+    echo "      （TUI 用的是内嵌后端，不需要这一步）"
 fi
 
 echo ""
@@ -175,7 +198,11 @@ fi
 echo ""
 echo "[✔] 安装完成"
 echo "  TUI:  $BINDIR/gocryptfs-tui"
-echo "  CLI:  $BINDIR/gocryptfs-cli -> $LIBDIR/gocryptfs-cli"
+if [ "$LINK_CLI" = "1" ]; then
+    echo "  CLI:  $BINDIR/gocryptfs-cli -> $LIBDIR/gocryptfs-cli"
+else
+    echo "  CLI:  $LIBDIR/gocryptfs-cli（未链接到 PATH；加 --link-cli 可链接）"
+fi
 echo ""
 echo "==> 文件清单"
 find "$LIBDIR" -type f | sort

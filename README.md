@@ -87,6 +87,35 @@ gocryptfs-cli --check-deps
 
 ## 安装
 
+三种方式**默认落到同一套路径**（用户级 `~/.local`，遵循 XDG），只是入口不同：
+
+| 安装方式 | 适合场景 | 主程序 | 独立 CLI |
+|---|---|---|---|
+| 官方安装脚本 | 只想装二进制 | `~/.local/bin/gocryptfs-tui` | 用内嵌副本（见下） |
+| `make install` / `install.sh` | 有源码、要一并装后端 | `~/.local/bin/gocryptfs-tui` | `~/.local/lib/gocryptfs-tui/gocryptfs-cli` |
+| 手动解压 tar.xz | 离线/自定义 | 建议放 `~/.local/bin/` | 用内嵌副本 |
+
+系统级安装统一用 `--prefix /usr/local`（`make install-system` / `./install.sh`），
+官方脚本可用 `GOCRYPTFS_TUI_INSTALL_DIR=/usr/local/bin` 覆盖。
+
+安装后统一自检：
+
+```bash
+command -v gocryptfs-tui        # 期望 ~/.local/bin/gocryptfs-tui
+gocryptfs-tui --version
+gocryptfs-tui --check-deps
+```
+
+> **独立 CLI 的规范位置**：TUI 首次运行会把内嵌后端释放到
+> `<数据目录>/backend/gocryptfs-cli`（默认 `~/.local/share/gocryptfs-tui/backend/gocryptfs-cli`），
+> 三种安装方式一致。想直接在命令行用，可自行软链一次：
+> ```bash
+> ln -sf "${XDG_DATA_HOME:-$HOME/.local/share}/gocryptfs-tui/backend/gocryptfs-cli" \
+>        "${XDG_BIN_HOME:-$HOME/.local/bin}/gocryptfs-cli"
+> ```
+> `make install`/`install.sh` 会把后端装到 `~/.local/lib/gocryptfs-tui/`，
+> 需要时用 `./install.sh --link-cli` 额外软链到 `~/.local/bin`。
+
 ### 方式一：官方安装脚本（推荐）
 
 ```bash
@@ -99,8 +128,15 @@ curl --proto '=https' --tlsv1.2 -LsSf \
 1. 检测系统架构（x86_64 / aarch64）
 2. 检测 libc（glibc / musl）
 3. 下载对应 tar.gz
-4. 解压到 `~/.cargo/bin` 或 `~/.local/bin`
-5. 提示 PATH 配置
+4. 安装到 `~/.local/bin`（与其它两种方式一致）
+5. 把该目录写入 shell profile 的 PATH（可用 `GOCRYPTFS_TUI_NO_MODIFY_PATH=1` 关闭）
+
+> 从 0.2.x 升级上来的用户：旧版官方脚本装在 `~/.cargo/bin`，新版装到 `~/.local/bin`，
+> 若 `~/.cargo/bin` 在 PATH 中更靠前会继续跑到旧版本。清理一次即可：
+> ```bash
+> rm -f ~/.cargo/bin/gocryptfs-tui ~/.cargo/bin/gocryptfs-tui-update
+> rm -f ~/.config/gocryptfs-tui/gocryptfs-tui-receipt.json
+> ```
 
 > **Shell 后端已内嵌在 TUI 二进制里**：首次运行 TUI 时会把 `gocryptfs-cli` 与
 > `lib/*.sh` 释放到 `~/.local/share/gocryptfs-tui/backend/`，因此**无需再单独安装 CLI**
@@ -193,6 +229,10 @@ make uninstall PREFIX=/opt/gocryptfs-tui
 gocryptfs-tui-installer.sh uninstall
 ```
 
+> 三种方式都**不删**配置与数据：配置 `~/.config/gocryptfs-tui/`、
+> 数据 `~/.local/share/gocryptfs-tui/`（含日志、历史、HELP.md、内嵌释放的后端）。
+> 需要彻底清理时自行删除这两个目录。
+>
 > `make uninstall` 只删除 `$PREFIX/bin/gocryptfs-tui`、`$PREFIX/bin/gocryptfs-cli`
 > 与 `$PREFIX/lib/gocryptfs-tui/`，并在命令末尾提示 PATH 中是否仍残留其他安装。
 > 手工清理等价于：
@@ -213,8 +253,17 @@ OPTIONS:
     -D, --data-dir <DIR>   数据目录（日志、历史、帮助）
                            [默认: ~/.local/share/gocryptfs-tui]
     -l, --lang <CODE>      界面语言，可选 zh-CN / en-US
+        --check-deps       检查运行时依赖并给出安装命令
     -h, --help             显示帮助
     -V, --version          显示版本信息
+```
+
+Shell 后端 `gocryptfs-cli` 提供**同款**全局选项（`-c` / `-D` / `-l` / `-V` / `-h` / `--check-deps`），
+便于脚本里统一调用：
+
+```bash
+gocryptfs-cli --version
+gocryptfs-cli -D /tmp/data -c /path/to/config.yaml list --json
 ```
 
 示例：
@@ -340,11 +389,22 @@ Shell 侧约定：文案模板放在 `shell/lib/i18n.sh`，只允许 `printf` �
 
 ### 配置文件位置
 
-默认：
+默认（遵循 XDG，`XDG_CONFIG_HOME` 生效）：
 
 ```
-~/.config/gocryptfs-tui/config.yaml
+${XDG_CONFIG_HOME:-~/.config}/gocryptfs-tui/config.yaml
 ```
+
+优先级：`-c/--config` > `GOCRYPTFS_CONFIG` > `CONFIG_FILE`（兼容）> `XDG_CONFIG_HOME` > `~/.config`。
+
+数据目录（日志 `app.log.jsonl`、历史 `history.jsonl`、`HELP.md`、内嵌后端）同理：
+
+```
+${XDG_DATA_HOME:-~/.local/share}/gocryptfs-tui/
+```
+
+优先级：`-D/--data-dir`（CLI 与 TUI 都支持）> `GOCRYPTFS_DATA_DIR` >
+`LOG_FILE`/`HISTORY_FILE`（TUI 给子进程用）> `XDG_DATA_HOME` > `~/.local/share`。
 
 可用 `-c` 指定其他路径：
 

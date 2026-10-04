@@ -12,6 +12,6 @@ installers = ["shell"]
 # Target platforms to build apps for (Rust target-triple syntax)
 targets = ["aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl"]
 # Path that installers should place binaries in
-install-path = "CARGO_HOME"
+install-path = "~/.local/bin/"
 # Whether to install an updater program
-install-updater = true
+install-updater = false

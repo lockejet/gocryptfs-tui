@@ -987,7 +987,7 @@ fn embedded_backend_is_materialized_and_runnable() {
     let dir = std::env::temp_dir().join(format!("gocryptfs-tui-backend-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
 
-    let cli = backend::install_to(&dir).expect("释放内嵌后端失败");
+    let cli = backend::install_to(&dir, &version_line()).expect("释放内嵌后端失败");
     assert!(cli.is_file(), "缺少 gocryptfs-cli: {}", cli.display());
     assert!(
         dir.join("lib/gocryptfs-lib.sh").is_file(),
@@ -998,6 +998,14 @@ fn embedded_backend_is_materialized_and_runnable() {
         std::fs::read_to_string(&cli).unwrap(),
         backend::CLI_SCRIPT,
         "释放出来的后端与二进制内嵌内容不一致"
+    );
+    // 版本文件：gocryptfs-cli --version 从自身目录读取
+    let ver_path = dir.join(backend::VERSION_FILE);
+    assert!(ver_path.is_file(), "缺少 VERSION 文件");
+    assert_eq!(
+        std::fs::read_to_string(&ver_path).unwrap().trim(),
+        version_line(),
+        "VERSION 内容与二进制版本不一致"
     );
 
     #[cfg(unix)]
@@ -1014,7 +1022,7 @@ fn embedded_backend_is_materialized_and_runnable() {
 
         // 幂等：内容一致时不重写（重写会换 inode）
         let ino = std::fs::metadata(&cli).unwrap().ino();
-        backend::install_to(&dir).expect("二次释放失败");
+        backend::install_to(&dir, &version_line()).expect("二次释放失败");
         assert_eq!(
             std::fs::metadata(&cli).unwrap().ino(),
             ino,
@@ -1036,9 +1044,22 @@ fn embedded_backend_is_materialized_and_runnable() {
     assert!(out.status.success(), "内嵌后端 --help 失败: {text}");
     assert!(text.contains("Usage:"), "内嵌后端输出异常: {text}");
 
+    // gocryptfs-cli --version 应与 TUI 版本一致
+    let vout = std::process::Command::new("bash")
+        .arg(&cli)
+        .arg("--version")
+        .output()
+        .expect("执行内嵌后端失败");
+    let vtext = String::from_utf8_lossy(&vout.stdout).to_string();
+    assert_eq!(
+        vtext.trim(),
+        format!("gocryptfs-cli {}", version_line()),
+        "内嵌后端 --version 与 TUI 版本不一致"
+    );
+
     // 自愈：文件被破坏／旧版本残留时，重新释放会覆盖回去
     std::fs::write(&cli, "#!/bin/bash\nexit 0\n").unwrap();
-    backend::install_to(&dir).expect("自愈失败");
+    backend::install_to(&dir, &version_line()).expect("自愈失败");
     assert_eq!(
         std::fs::read_to_string(&cli).unwrap(),
         backend::CLI_SCRIPT,

@@ -17,7 +17,10 @@ else
     source "$LIB_DIR/common.sh"
 fi
 
-CONFIG_FILE="${CONFIG_FILE:-$HOME/.config/gocryptfs-tui/config.yaml}"
+# 路径解析与 Rust 侧保持一致（XDG 优先；GOCRYPTFS_* 优先，旧变量兼容）
+CONFIG_FILE="${GOCRYPTFS_CONFIG:-${CONFIG_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/gocryptfs-tui/config.yaml}}"
+DATA_DIR="${GOCRYPTFS_DATA_DIR:-${DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/gocryptfs-tui}}"
+VERSION_FILE="$SCRIPT_DIR/VERSION"
 JSON_MODE=false
 VERBOSE=false
 DRY_RUN=false
@@ -52,6 +55,30 @@ while [ $i -le $# ]; do
                 exit 1
             fi
             CONFIG_FILE="${!i}"
+            ;;
+        -D|--data-dir)
+            i=$((i+1))
+            if [ $i -gt $# ]; then
+                te cli.error.data_dir_needs_value >&2
+                exit 1
+            fi
+            DATA_DIR="${!i}"
+            ;;
+        --data-dir=*)
+            _dataval="${arg#--data-dir=}"
+            if [ -z "$_dataval" ]; then
+                te cli.error.data_dir_needs_value >&2
+                exit 1
+            fi
+            DATA_DIR="$_dataval"
+            ;;
+        -V|--version)
+            if [ -r "$VERSION_FILE" ]; then
+                printf 'gocryptfs-cli %s\n' "$(cat "$VERSION_FILE")"
+            else
+                printf 'gocryptfs-cli %s\n' "unknown"
+            fi
+            exit 0
             ;;
         -l|--lang)
             i=$((i+1))
@@ -91,7 +118,9 @@ set -- "${POSITIONAL[@]}"
 # 未显式指定 --lang 时，用最终配置路径重新解析（配置里的 language: 生效）
 i18n_init
 
-export CONFIG_FILE JSON_MODE VERBOSE DRY_RUN I18N_LANG
+# 参数解析完成后才确定数据目录（-D/--data-dir 需要在这里生效）
+apply_data_dir
+export CONFIG_FILE DATA_DIR JSON_MODE VERBOSE DRY_RUN I18N_LANG
 
 if [ $# -eq 0 ]; then
     show_help

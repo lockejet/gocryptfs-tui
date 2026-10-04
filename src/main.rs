@@ -46,6 +46,11 @@ fn version_string() -> String {
     format!("{} ({}, {})", APP_VERSION, APP_COMMIT, APP_BUILD_TIME)
 }
 
+/// 版本串（写进内嵌后端的 VERSION 文件，供 `gocryptfs-cli --version` 使用）
+fn version_line() -> String {
+    version_string()
+}
+
 fn short_version() -> String {
     APP_VERSION.to_string()
 }
@@ -3937,7 +3942,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 发行包不含 Shell 后端：运行 TUI 前先把内嵌副本释放到数据目录
     // （--help/--version 不写盘，只探测已释放的副本，保持只读）
     if matches!(outcome.action, cli::Action::Run) {
-        if let Err(e) = backend::install_embedded(&data_dir) {
+        if let Err(e) = backend::install_embedded(&data_dir, &version_line()) {
             backend::set_error(e);
         }
     } else {

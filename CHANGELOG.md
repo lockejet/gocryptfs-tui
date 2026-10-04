@@ -2,27 +2,35 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/)。
 
-## [0.2.2] - 2026-10-04
+## [Unreleased]
 
 ### Features
-- 新增运行时依赖检查：`gocryptfs-tui --check-deps` 列出缺失依赖、用途与 Debian/Ubuntu 安装命令，
-  并识别 Debian 源里的「Python 版 yq」（提示改用 mikefarah Go v4）；缺必需依赖时退出码 1
-- TUI 启动时若缺必需依赖（或 yq 版本不对），直接把上述提示写进输出区，
-  不再只表现为「列表为空」「执行 CLI 失败」
-- `install.sh` 安装完成后自动执行依赖检查并给出安装提示
-
-### Bug Fixes
-- `gocryptfs-cli list` 在缺少 `yq`/`jq`/`mountpoint` 时不再静默返回 0 个卷，改为明确报错
-  （此前 TUI 只会显示一个空列表，无从判断原因）
-- TUI 列表为空时直接显示原因：加载失败（红色，含 CLI 报错原文与「按 r 重试」提示）
-  或「配置里没有卷: <路径>」（含「按 e 编辑配置」提示）；此前只有一行灰色「（无卷）」
-- 错误输出在缺少 `jq` 时也能正常打印（JSON 模式自动降级为纯文本）
-- `gocryptfs-cli` 缺参数/缺选项值时给出用法或明确报错，不再因 `set -u` 直接崩溃
-  （`$1: unbound variable`）：受影响命令 `info`/`ls`/`tree`/`mount`，以及
-  `--name`/`--cipher`/`--target`/`--limit`/`--src`/`--action`/`--result`/`--since` 缺值
+- Shell 后端与 Rust 侧路径规则对齐：支持 `XDG_CONFIG_HOME` / `XDG_DATA_HOME`
+  （此前硬编码 `$HOME/.config`、`$HOME/.local/share`，设了 XDG 变量时会读到不同配置）
+- `gocryptfs-cli` 补齐与 TUI 同款的全局选项：`-V/--version`、`-D/--data-dir`；
+  路径优先级统一为 `-D/-c` > `GOCRYPTFS_DATA_DIR`/`GOCRYPTFS_CONFIG` >
+  旧变量（`LOG_FILE`/`HISTORY_FILE`/`CONFIG_FILE`）> XDG > 默认
+- TUI 释放内嵌后端时同时写入 `VERSION`，`gocryptfs-cli --version` 与 TUI 版本一致
+- `install.sh` 默认**不再**把 `gocryptfs-cli` 软链到 `<prefix>/bin`（三种方式一致：
+  规范位置为数据目录下的内嵌副本），需要时用 `--link-cli` 显式开启
 
 ### Documentation
-- README「依赖」章节补充 `mountpoint`、Go 版 yq 说明、`--check-deps` 用法与安装阶段自动检查
+- README「安装」改为"三种方式 → 同一套路径"对照表 + 统一自检三连
+  （`command -v` / `--version` / `--check-deps`）+ 卸载清理说明；
+  配置/数据目录补上 XDG 与环境变量优先级
+
+### 变更
+- **统一三种安装方式的默认落点**：官方安装脚本改用 `install-path = "~/.local/bin/"`，
+  与 `install.sh`/`make install`、手动解压一致（此前官方脚本装到 `~/.cargo/bin`）；
+  从 0.2.x 升级的用户需清理 `~/.cargo/bin/gocryptfs-tui*` 残留（README 有说明）
+- 关闭 cargo-dist 的 `install-updater`：不再产出 `gocryptfs-tui-update` 与安装 receipt
+  （`~/.config/gocryptfs-tui/gocryptfs-tui-receipt.json`），三种方式的升级方式统一为
+  "重跑对应安装方式"
+
+## [0.2.2] - 2026-10-04
+
+### Documentation
+- 更新 CHANGELOG
 
 ## [0.2.1] - 2026-10-03
 

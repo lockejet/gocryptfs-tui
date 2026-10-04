@@ -20,6 +20,9 @@ pub const CLI_SCRIPT: &str = include_str!("../shell/gocryptfs-cli");
 pub const LIB_SCRIPT: &str = include_str!("../shell/lib/gocryptfs-lib.sh");
 pub const I18N_SCRIPT: &str = include_str!("../shell/lib/i18n.sh");
 
+/// 版本文件（`gocryptfs-cli --version` 读取同目录的 VERSION）
+pub const VERSION_FILE: &str = "VERSION";
+
 /// (相对路径, 内容, 是否可执行)
 const SCRIPTS: [(&str, &str, bool); 3] = [
     ("gocryptfs-cli", CLI_SCRIPT, true),
@@ -36,12 +39,14 @@ pub fn extract_dir(data_dir: &Path) -> PathBuf {
     data_dir.join("backend")
 }
 
-/// 把内嵌后端释放到指定目录（不含全局状态，便于测试）
-pub fn install_to(dir: &Path) -> Result<PathBuf, String> {
+/// 把内嵌后端释放到指定目录（不含全局状态，便于测试）。
+/// `version` 写入同目录的 `VERSION`，供 `gocryptfs-cli --version` 显示。
+pub fn install_to(dir: &Path, version: &str) -> Result<PathBuf, String> {
     fs::create_dir_all(dir).map_err(|e| format!("{}: {}", dir.display(), e))?;
     for (rel, content, executable) in SCRIPTS {
         write_if_changed(&dir.join(rel), content, executable)?;
     }
+    write_if_changed(&dir.join(VERSION_FILE), &format!("{}\n", version), false)?;
     Ok(dir.join("gocryptfs-cli"))
 }
 
@@ -49,8 +54,8 @@ pub fn install_to(dir: &Path) -> Result<PathBuf, String> {
 ///
 /// 返回释放后的 `gocryptfs-cli` 路径；失败时返回错误描述（调用方应提示用户，
 /// 并回退到 PATH 中的后端）。
-pub fn install_embedded(data_dir: &Path) -> Result<PathBuf, String> {
-    let cli = install_to(&extract_dir(data_dir))?;
+pub fn install_embedded(data_dir: &Path, version: &str) -> Result<PathBuf, String> {
+    let cli = install_to(&extract_dir(data_dir), version)?;
     let _ = EMBEDDED_CLI.set(cli.clone());
     Ok(cli)
 }

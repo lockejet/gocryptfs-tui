@@ -28,17 +28,20 @@ declare -A I18N_ZH I18N_EN
 I18N_ZH=(
     # gocryptfs-cli
     [cli.error.config_needs_value]='错误: -c/--config 需要参数'
+    [cli.error.data_dir_needs_value]='错误: -D/--data-dir 需要目录'
     [cli.error.lang_needs_value]='错误: -l/--lang 需要语言代码'
     [cli.error.unsupported_lang]='不支持的语言: %s（可用: zh-CN, en-US）'
     [cli.error.unknown_command]='未知命令: %s'
     [cli.help]='gocryptfs-cli - gocryptfs-tui 的 Shell 后端
-用法: gocryptfs-cli [-c <config>] [-l <lang>] <command> [options]
+用法: gocryptfs-cli [-c <config>] [-D <data-dir>] [-l <lang>] <command> [options]
 命令: list / info / ls / tree / mount / umount / create / remove
       config / edit / check-deps / log / help
 
 全局选项:
-  -c, --config FILE  配置文件路径
+  -c, --config FILE  配置文件路径（默认 $XDG_CONFIG_HOME/gocryptfs-tui/config.yaml）
+  -D, --data-dir DIR 数据目录（日志/历史，默认 $XDG_DATA_HOME/gocryptfs-tui）
   -l, --lang CODE    界面语言: zh-CN | en-US
+  -V, --version      显示版本
   --json             JSON 输出
   -v, --verbose      详细输出
   --dry-run          预览模式
@@ -164,17 +167,20 @@ log 子命令选项:
 # ------------------------------------------------------------
 I18N_EN=(
     [cli.error.config_needs_value]='Error: -c/--config needs a value'
+    [cli.error.data_dir_needs_value]='Error: -D/--data-dir needs a directory'
     [cli.error.lang_needs_value]='Error: -l/--lang needs a language code'
     [cli.error.unsupported_lang]='Unsupported language: %s (available: zh-CN, en-US)'
     [cli.error.unknown_command]='Unknown command: %s'
     [cli.help]='gocryptfs-cli - shell backend of gocryptfs-tui
-Usage: gocryptfs-cli [-c <config>] [-l <lang>] <command> [options]
+Usage: gocryptfs-cli [-c <config>] [-D <data-dir>] [-l <lang>] <command> [options]
 Commands: list / info / ls / tree / mount / umount / create / remove
           config / edit / check-deps / log / help
 
 Global options:
-  -c, --config FILE  config file path
+  -c, --config FILE  config file path (default $XDG_CONFIG_HOME/gocryptfs-tui/config.yaml)
+  -D, --data-dir DIR data directory (logs/history, default $XDG_DATA_HOME/gocryptfs-tui)
   -l, --lang CODE    UI language: zh-CN | en-US
+  -V, --version      show version
   --json             JSON output
   -v, --verbose      verbose output
   --dry-run          preview only
