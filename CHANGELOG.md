@@ -2,18 +2,25 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/)。
 
-## [0.4.1] - 2026-10-04
+## [Unreleased]
 
 ### Bug Fixes
-- `gocryptfs-tui-install.sh` 改为 **POSIX sh 兼容**：原来用了 bash 数组等语法，
-  在 Debian/Ubuntu 的 `/bin/sh`（dash）下会直接报 `Syntax error: "(" unexpected`，
-  导致 README 推荐的 `curl ... | sh -s -- --system` 无法使用（`| bash -s --` 可绕过）
-- `usage()` 改为内嵌文本，不再依赖 `$0`；管道执行（`curl | sh`）时卸载提示给出 URL 形式
-- 卸载时顺手清理空的 `<prefix>/bin`、`<prefix>/lib` 目录（非空则自动跳过）
+- `gocryptfs-tui-install.sh`（及 `install.sh`）**默认模式改为自动判断**：
+  `curl … | sh`（无源码树）→ 从 Release 安装；在源码仓库里执行 `./install.sh` → 本地编译。
+  此前一律按本地源码处理，没有 Rust 工具链的机器会直接报 `cargo: not found`；
+  新增 `--local` 可强制本地模式
+- 本地模式缺少 cargo 时给出可操作提示（改用 `--from-release`），而不是 `cargo: not found`
+- 用法文本只保留在 `--help`（heredoc）一处，头部注释不再重复，避免文档与实现漂移
+- 新增 `GOCRYPTFS_TUI_REPO` 环境变量可覆盖仓库地址（镜像/测试用）
 
 ### Testing
-- `make test-install` 扩展为 24 项：全部改用 `sh`（dash）执行，新增 `dash -n` / `sh -n`
-  语法检查与 `cat install.sh | sh -s --` 管道用例，防止再次引入 bash 专有语法
+- `make test-install` 扩展到 29 项：新增模式自动判断用例（管道执行走 Release、
+  不会尝试编译、无 cargo 时的提示、`--local` 强制本地模式）
+
+## [0.4.1] - 2026-10-04
+
+### Documentation
+- 更新 CHANGELOG
 
 ## [0.4.0] - 2026-10-04
 

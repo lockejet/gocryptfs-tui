@@ -1,40 +1,23 @@
 #!/bin/sh
 # install.sh — 安装 / 卸载 gocryptfs-tui（TUI 二进制 + Shell 后端）
 #
-# 用法：
-#   ./install.sh                         从本地源码安装（默认前缀 /usr/local，按需 sudo）
-#   ./install.sh --prefix ~/.local       安装到指定前缀（无需 sudo）
-#   ./install.sh --system                等价 --prefix /usr/local，并链接独立 CLI
-#   ./install.sh --from-release          不编译：从 GitHub Release 下载当前平台二进制
-#   ./install.sh --from-release v0.3.0   指定版本（等价 --version v0.3.0）
-#   ./install.sh --from-release --system 一条命令做系统级安装（需要 sudo）
-#   ./install.sh --uninstall             按安装清单卸载
-#   ./install.sh --uninstall --prefix ~/.local
-#   ./install.sh --no-build              跳过编译，直接用已有产物安装
-#   ./install.sh --link-cli              把 gocryptfs-cli 软链到 <prefix>/bin
-#   ./install.sh --no-link-cli           即使 --system 也不链接
-#   ./install.sh --no-deps-check         跳过安装后的运行时依赖检查
+# 两种来源：
+#   * 本地源码：在仓库里执行 ./install.sh（需要 cargo）
+#   * 官方 Release：./install.sh --from-release（不需要源码/工具链），
+#     也可直接 `curl -LsSf <release>/gocryptfs-tui-install.sh | sh -s -- ...`
 #
-# 说明：
-#   * `--from-release` 不需要 Rust 工具链，也不需要源码仓库：脚本会
-#     1) 按 uname/ldd 判定目标三元组；2) 下载 tar.xz 并校验 sha256；
-#     3) 从同一 Release 的 source.tar.gz 取 shell/ 作为独立后端。
-#   * TUI 与 Shell 后端必须成套安装，否则 TUI 可能调用到旧版 gocryptfs-cli，
-#     出现「界面已是英文、输出区仍是中文」这类不一致。
-#   * TUI 默认使用**内嵌**后端（首启释放到 <data-dir>/backend）；本脚本安装的
-#     gocryptfs-cli 是给"只想用命令行/想固定一份独立后端"的场景准备的。
-#   * 安装会写清单 <prefix>/lib/gocryptfs-tui/INSTALLED.json 与 INSTALLED.files，
-#     `--uninstall` 按清单精确删除，不碰前缀里的其它文件。
-#   * 目标不可写时才使用 sudo；请勿直接用 sudo 运行本脚本（编译会用 root 的 cargo）。
+# 模式默认自动判断：curl|sh（无源码树）→ Release；仓库内执行 → 本地源码。
+# 完整用法见 `./install.sh --help`（仅此一处，避免文档与实现漂移）。
 set -eu
 
-REPO="lockejet/gocryptfs-tui"
+REPO="${GOCRYPTFS_TUI_REPO:-lockejet/gocryptfs-tui}"
 PREFIX="${PREFIX:-/usr/local}"
 DO_BUILD=1
 UNINSTALL=0
 LINK_CLI="${LINK_CLI:-0}"
 LINK_CLI_SET=0
 FROM_RELEASE=0
+MODE=""          # 空 = 自动；local / release
 RELEASE_VER=""
 DEPS_CHECK=1
 
@@ -46,6 +29,7 @@ install.sh — 安装 / 卸载 gocryptfs-tui（TUI 二进制 + Shell 后端）
   ./install.sh                         从本地源码安装（默认前缀 /usr/local，按需 sudo）
   ./install.sh --prefix ~/.local       安装到指定前缀（无需 sudo）
   ./install.sh --system                等价 --prefix /usr/local，并链接独立 CLI
+  ./install.sh --local                 强制本地源码模式（需要 cargo）
   ./install.sh --from-release          不编译：从 GitHub Release 下载当前平台二进制
   ./install.sh --from-release v0.3.0   指定版本（等价 --version v0.3.0）
   ./install.sh --uninstall             按安装清单卸载
@@ -57,6 +41,9 @@ install.sh — 安装 / 卸载 gocryptfs-tui（TUI 二进制 + Shell 后端）
   # 不需要源码/工具链时（Release 附件）：
   curl -LsSf https://github.com/lockejet/gocryptfs-tui/releases/latest/download/gocryptfs-tui-install.sh \
     | sh -s -- --system
+
+模式默认自动判断：`curl … | sh`（无源码树）→ 从 Release 安装；
+在源码仓库里执行 `./install.sh` → 本地编译。可用 `--local` / `--from-release` 强制。
 
 兼容 POSIX sh（dash），因此 `curl ... | sh` 可以直接用。
 USAGE_EOF
@@ -70,12 +57,14 @@ while [ $# -gt 0 ]; do
         --system)        PREFIX="/usr/local"
                          # 系统级默认链接独立 CLI（--no-link-cli 可关掉，与顺序无关）
                          if [ "$LINK_CLI_SET" -eq 0 ]; then LINK_CLI=1; fi ;;
-        --from-release)  FROM_RELEASE=1
+        --from-release)  FROM_RELEASE=1; MODE="release"
                          case "${2:-}" in v[0-9]*) RELEASE_VER="$2"; shift ;; esac ;;
-        --from-release=*) FROM_RELEASE=1; RELEASE_VER="${1#--from-release=}" ;;
-        --version|-V)    RELEASE_VER="${2:?--version 需要版本号，如 v0.3.0}"; FROM_RELEASE=1; shift ;;
-        --release-version) RELEASE_VER="${2:?--release-version 需要版本号}"; shift ;;
-        --no-build)      DO_BUILD=0 ;;
+        --from-release=*) FROM_RELEASE=1; MODE="release"; RELEASE_VER="${1#--from-release=}" ;;
+        --version|-V)    RELEASE_VER="${2:?--version 需要版本号，如 v0.3.0}"; FROM_RELEASE=1; MODE="release"; shift ;;
+        --release-version) RELEASE_VER="${2:?--release-version 需要版本号}"; MODE="release"; shift ;;
+        --local)         MODE="local" ;;
+        --no-build)      DO_BUILD=0
+                         if [ -z "$MODE" ]; then MODE="local"; fi ;;
         --link-cli)      LINK_CLI=1; LINK_CLI_SET=1 ;;
         --no-link-cli)   LINK_CLI=0; LINK_CLI_SET=1 ;;
         --no-deps-check) DEPS_CHECK=0 ;;
@@ -213,6 +202,17 @@ else
     echo "[✔] 依赖齐全"
 fi
 
+# ---- 模式自动判断 ----
+# curl|sh 时没有源码树（$0 也不是可读文件），必须走 Release；否则在源码目录里就本地编译。
+if [ -z "$MODE" ]; then
+    if [ -f Cargo.toml ] && [ -f src/main.rs ] && [ -f "$0" ] && [ -r "$0" ]; then
+        MODE="local"
+    else
+        MODE="release"
+    fi
+fi
+if [ "$MODE" = "release" ]; then FROM_RELEASE=1; fi
+
 # ---- 取二进制与 Shell 后端：本地构建 或 官方 Release ----
 BIN_SRC=""
 SHELL_DIR=""
@@ -243,7 +243,7 @@ if [ "$FROM_RELEASE" -eq 1 ]; then
         [ -n "$ver_label" ] || ver_label="latest"
     fi
 
-    echo "==> 从 Release 获取 $ver_label（$target）"
+    echo "==> 安装来源: Release（$ver_label, $target）"
     if ! download "$base/$asset" "$DL/$asset"; then
         echo "[!] 下载失败: $base/$asset" >&2
         echo "    可手动下载: https://github.com/$REPO/releases" >&2
@@ -277,7 +277,14 @@ if [ "$FROM_RELEASE" -eq 1 ]; then
     SOURCE_DESC="release:$ver_label"
 else
     if [ "$DO_BUILD" -eq 1 ]; then
-        echo "==> 编译 gocryptfs-tui"
+        if ! have cargo; then
+            echo "[!] 本地模式需要 Rust 工具链，但未找到 cargo。" >&2
+            echo "    没有源码/工具链时请从 Release 安装：" >&2
+            echo "      curl -LsSf https://github.com/$REPO/releases/latest/download/gocryptfs-tui-install.sh \\" >&2
+            echo "        | sh -s -- --from-release --system" >&2
+            exit 1
+        fi
+        echo "==> 编译 gocryptfs-tui（本地源码模式）"
         cargo build --release
     else
         echo "==> 跳过编译（--no-build）"
@@ -285,6 +292,7 @@ else
     BIN_SRC="target/release/gocryptfs-tui"
     SHELL_DIR="shell"
     SOURCE_DESC="local:$BIN_SRC"
+    echo "==> 安装来源: 本地源码（$BIN_SRC）"
     [ -f "$BIN_SRC" ] || { echo "[!] 未找到 $BIN_SRC（先 make build 或去掉 --no-build）" >&2; exit 1; }
     if [ ! -f "$SHELL_DIR/gocryptfs-cli" ] || [ ! -f "$SHELL_DIR/lib/gocryptfs-lib.sh" ]; then
         echo "[!] 缺少 shell/ 或 shell/lib/（需要 gocryptfs-lib.sh 与 i18n.sh）" >&2

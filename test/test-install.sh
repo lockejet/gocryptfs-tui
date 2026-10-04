@@ -105,6 +105,26 @@ out="$(cat "$INSTALL" | sh -s -- --prefix "$P4" --no-build --no-deps-check 2>&1 
 case "$out" in *"gocryptfs-tui-install.sh"*) v=1 ;; *) v=0 ;; esac
 check "管道执行: 卸载提示给出 URL 形式" "1" "$v"
 
+# ---- 5. 模式自动判断 ----
+# 5.1 管道执行（无源码树）→ 必须走 Release，绝不能尝试编译
+out="$(GOCRYPTFS_TUI_REPO=nonexistent/none cat "$INSTALL" | sh -s -- --prefix "$TMP/mode-release" 2>&1 || true)"
+case "$out" in *"安装来源: Release"*) v=1 ;; *) v=0 ;; esac
+check "管道执行默认走 Release" "1" "$v"
+case "$out" in *"编译"*) v=0 ;; *) v=1 ;; esac
+check "管道执行不会尝试编译" "1" "$v"
+
+# 5.2 仓库内执行 → 本地模式；没有 cargo 时给出可操作提示
+out="$(cd "$PROJECT_ROOT" && env PATH=/usr/bin:/bin sh "$INSTALL" --prefix "$TMP/mode-local" 2>&1 || true)"
+case "$out" in *"未找到 cargo"*) v=1 ;; *) v=0 ;; esac
+check "本地模式缺 cargo 时给出提示" "1" "$v"
+case "$out" in *"--from-release"*) v=1 ;; *) v=0 ;; esac
+check "提示里给出 --from-release 用法" "1" "$v"
+
+# 5.3 显式 --local 优先于自动判断（即使管道执行）
+out="$(cat "$INSTALL" | sh -s -- --local --no-build --prefix "$TMP/mode-forced" --no-deps-check 2>&1 || true)"
+case "$out" in *"安装来源: 本地源码"*) v=1 ;; *) v=0 ;; esac
+check "--local 强制本地模式" "1" "$v"
+
 # ---- 5. 参数解析：--version 需要版本号；未知参数报错 ----
 out="$(sh "$INSTALL" --version 2>&1 >/dev/null || true)"
 case "$out" in *"需要版本号"*) v=1 ;; *) v=0 ;; esac
