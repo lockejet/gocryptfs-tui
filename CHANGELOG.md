@@ -2,7 +2,7 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/)。
 
-## [Unreleased]
+## [0.5.0] - 2026-10-04
 
 ### Documentation
 - README「安装」重写为三种模式 + 通用选项表；离线 tar.xz 降级为懒人模式附注；
