@@ -2,7 +2,7 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/)。
 
-## [Unreleased]
+## [0.4.2] - 2026-10-04
 
 ### Bug Fixes
 - `gocryptfs-tui-install.sh`（及 `install.sh`）**默认模式改为自动判断**：
