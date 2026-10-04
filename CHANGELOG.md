@@ -2,7 +2,7 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/)。
 
-## [Unreleased]
+## [0.4.1] - 2026-10-04
 
 ### Bug Fixes
 - `gocryptfs-tui-install.sh` 改为 **POSIX sh 兼容**：原来用了 bash 数组等语法，
