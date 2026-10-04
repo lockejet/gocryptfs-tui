@@ -2,7 +2,7 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/)。
 
-## [Unreleased]
+## [0.5.2] - 2026-10-04
 
 ### Testing
 - 新增渲染测试：TAB2/TAB3 按 `Enter` 不进入向导且不改状态、相关文案不含 `Enter`
