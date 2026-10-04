@@ -2,7 +2,7 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/)。
 
-## [Unreleased]
+## [0.2.2] - 2026-10-04
 
 ### Features
 - 新增运行时依赖检查：`gocryptfs-tui --check-deps` 列出缺失依赖、用途与 Debian/Ubuntu 安装命令，
