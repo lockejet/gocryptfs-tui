@@ -50,27 +50,38 @@ TUI 通过调用 CLI 完成所有实际工作，因此两者行为完全一致�
 
 运行时依赖：
 
-- `gocryptfs`
-- `fusermount`（`gocryptfs` 自带或系统提供）
-- `rsync`
-- `yq`（[mikefarah/yq](https://github.com/mikefarah/yq)）
-- `jq`
-- `tree`（可选，用于 `t` 树状视图）
+| 依赖 | 用途 | 是否必需 |
+|------|------|----------|
+| `gocryptfs` | 挂载/卸载加密卷 | 必需 |
+| `fusermount`（`fuse3`） | 卸载 FUSE 挂载 | 必需 |
+| `rsync` | 迁移/还原数据 | 必需 |
+| `yq`（[mikefarah/yq](https://github.com/mikefarah/yq) **Go 版 v4**） | 解析 YAML 配置 | 必需 |
+| `jq` | JSON 输出 | 必需 |
+| `mountpoint`（`util-linux`） | 检测挂载状态 | 必需 |
+| `tree` | `t` 树状视图 | 可选 |
 
 Debian / Ubuntu 安装：
 
 ```bash
-sudo apt install gocryptfs rsync jq fuse3
+sudo apt install gocryptfs fuse3 rsync jq util-linux
 sudo wget -qO /usr/local/bin/yq \
     https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
 sudo chmod +x /usr/local/bin/yq
 ```
 
-检查依赖是否齐全：
+> ⚠️ `yq` 必须是 **mikefarah Go 版 v4**。Debian/Ubuntu 源里的 `yq` 是 Python 包装版，
+> 语法不同，会导致读不出卷列表（界面里表现为「列表为空」）。
+
+检查依赖是否齐全（二选一，TUI 的检查不依赖 Shell 后端是否在 PATH 上）：
 
 ```bash
+gocryptfs-tui --check-deps     # 推荐：缺什么、怎么装，一并打印；缺必需依赖时退出码 1
 gocryptfs-cli --check-deps
 ```
+
+- 用**官方安装脚本**或 `./install.sh` 安装时，安装结束后会自动跑这项检查并提示；
+- TUI **首次运行**时若缺必需依赖（或 `yq` 版本不对），会把提示写到输出区，
+  不会只表现为「列表为空」或「执行失败」。
 
 ---
 

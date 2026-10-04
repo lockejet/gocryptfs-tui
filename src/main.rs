@@ -4,6 +4,7 @@
 mod i18n;
 mod backend;
 mod cli;
+mod deps;
 mod logger;
 
 use crossterm::{
@@ -804,6 +805,14 @@ impl App {
                 backend::extract_dir(&app.data_dir).display().to_string(),
                 err
             ));
+        }
+        // 运行时依赖缺失（或 yq 不是 Go v4）时给出安装提示
+        let missing_deps = deps::missing();
+        let yq_bad = deps::yq_flavor_ok();
+        if deps::has_problems(&missing_deps, yq_bad) {
+            for line in deps::report_lines(&missing_deps, yq_bad) {
+                app.add_output(line);
+            }
         }
         // 英文界面 + 旧版后端（不认识 --lang）时提示一次，否则输出区会残留中文
         if i18n::lang() != i18n::DEFAULT_LANG && !cli_supports_lang(&cli_path()) {
@@ -3959,6 +3968,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         cli::Action::Version => {
             print_version();
             return Ok(());
+        }
+        cli::Action::CheckDeps => {
+            let missing = deps::missing();
+            let yq_bad = deps::yq_flavor_ok();
+            for line in deps::report_lines(&missing, yq_bad) {
+                println!("{}", line);
+            }
+            std::process::exit(if deps::has_problems(&missing, yq_bad) {
+                1
+            } else {
+                0
+            });
         }
         cli::Action::Run => {}
     }

@@ -1104,3 +1104,91 @@ fn empty_list_shows_reason() {
     );
     i18n::set_lang(i18n::Lang::ZhCn);
 }
+
+/// 依赖检查：只有 PATH 里的可执行文件才算存在；缺依赖时报告里必须给出安装命令。
+#[test]
+fn deps_check_reports_missing_and_install_hint() {
+    let _guard = lock_lang();
+    let tmp = std::env::temp_dir().join(format!("gocryptfs-tui-deps-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+
+    // 空目录 → 全部缺失
+    let missing = deps::missing_in(std::slice::from_ref(&tmp));
+    assert_eq!(
+        missing.len(),
+        deps::DEPS.len(),
+        "空 PATH 应报告全部依赖缺失"
+    );
+    let zh = deps::report_lines(&missing, None).join("\n");
+    assert!(zh.contains("缺少运行时依赖"), "{zh}");
+    assert!(zh.contains("sudo apt install"), "{zh}");
+    assert!(zh.contains("mikefarah"), "缺少 yq Go 版提示:\n{zh}");
+    assert!(zh.contains("可选依赖缺失"), "{zh}");
+    assert!(deps::has_problems(&missing, None));
+
+    // 补齐所有依赖（可执行） → 一个都不缺
+    for d in deps::DEPS {
+        let p = tmp.join(d.cmd);
+        std::fs::write(&p, "#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+    let none: Vec<&deps::Dep> = Vec::new();
+    assert!(deps::missing_in(std::slice::from_ref(&tmp)).is_empty());
+    assert!(deps::report_lines(&none, None)[0].contains("齐全"));
+    assert!(!deps::has_problems(&none, None));
+    // yq 版本不对也算问题
+    assert!(deps::has_problems(&none, Some(false)));
+
+    // 没有执行权限的文件不算"存在"
+    let p = tmp.join("noexec");
+    std::fs::write(&p, "x").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    assert!(!deps::exists_in(std::slice::from_ref(&tmp), "noexec"));
+
+    // 英文界面
+    i18n::set_lang(i18n::Lang::EnUs);
+    let en = deps::report_lines(&missing, None).join("\n");
+    assert!(en.contains("Missing runtime dependencies"), "{en}");
+    assert!(en.contains("sudo apt install"), "{en}");
+    i18n::set_lang(i18n::Lang::ZhCn);
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// 启动时依赖不全 → 输出区必须出现"缺什么 + 怎么装"（模拟 main 的启动提示逻辑）。
+#[test]
+fn startup_dep_warning_is_visible_in_output() {
+    let _guard = lock_lang();
+    i18n::set_lang(i18n::Lang::ZhCn);
+    // 输出区只有几行可见，这里验证"提示能进输出区且可见"即可；
+    // 报告内容的完整性由 deps_check_reports_missing_and_install_hint 覆盖。
+    let missing: Vec<&deps::Dep> = deps::DEPS.iter().filter(|d| d.required).collect();
+    let lines = deps::report_lines(&missing, None);
+    let mut app = test_app();
+    app.add_output(lines[0].clone());
+    app.add_output(
+        lines
+            .iter()
+            .find(|l| l.contains("apt install"))
+            .cloned()
+            .expect("报告里应有安装命令"),
+    );
+    let text = render_text(&mut app);
+    assert!(
+        text.contains("缺少运行时依赖"),
+        "输出区缺少依赖提示:\n{text}"
+    );
+    assert!(
+        text.contains("sudo apt install"),
+        "输出区缺少安装命令:\n{text}"
+    );
+}

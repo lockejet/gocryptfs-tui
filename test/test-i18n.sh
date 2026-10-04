@@ -206,5 +206,15 @@ check "shell log 只输出 JSON 行" "1" "$(printf '%s\n' "$out" | grep -c .)"
 check "shell log 内容正确" "mount" "$(printf '%s' "$out" | jq -r '.action')"
 
 echo ""
+# 15. --check-deps：依赖齐全退出 0；缺依赖退出 1 并给出安装命令
+out="$("$BIN" --check-deps 2>&1)"; rc=$?
+if printf '%s' "$out" | grep -qE '依赖齐全|dependencies present'; then
+    check "--check-deps 依赖齐全时退出 0" "0" "$rc"
+else
+    check "--check-deps 缺依赖时退出 1" "1" "$rc"
+    printf '%s' "$out" | grep -q 'apt install' && has_hint=1 || has_hint=0
+    check "--check-deps 给出安装命令" "1" "$has_hint"
+fi
+
 echo "===== 结果: $PASS 通过, $FAIL 失败 ====="
 [ "$FAIL" -eq 0 ] || exit 1

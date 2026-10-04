@@ -156,6 +156,23 @@ else
 fi
 
 echo ""
+echo "==> 运行时依赖检查"
+if "$BINDIR/gocryptfs-tui" --check-deps; then
+    :
+else
+    rc=$?
+    if [ "$rc" -eq 1 ]; then
+        echo ""
+        echo "[!] 缺少运行时依赖，请按上面的安装命令补齐后再运行 gocryptfs-tui"
+    else
+        # 旧版二进制不认识 --check-deps：退回 Shell 后端的检查
+        echo "[·] 该 TUI 二进制不支持 --check-deps，改用 Shell 后端检查"
+        "$BINDIR/gocryptfs-cli" --check-deps \
+            || echo "[!] 缺少运行时依赖，请按上面的提示安装"
+    fi
+fi
+
+echo ""
 echo "[✔] 安装完成"
 echo "  TUI:  $BINDIR/gocryptfs-tui"
 echo "  CLI:  $BINDIR/gocryptfs-cli -> $LIBDIR/gocryptfs-cli"
