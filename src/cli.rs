@@ -1,7 +1,7 @@
 // cli.rs — 命令行参数解析
 //
 // 手写解析，不引入 clap。
-// 支持：-c/--config、-D/--data-dir、-l/--lang、-h/--help、-V/--version、--check-deps
+// 支持：-c/--config、-D/--data-dir、-l/--lang、-h/--help、-V/--version、--check-deps、--print-paths
 // 支持：--config=path、--data-dir=path、--lang=code
 // 规则：
 //   - -h/-V 优先于一切（即使和错误参数同时出现也先响应）
@@ -20,6 +20,8 @@ pub enum Action {
     Version,
     /// 检查运行时依赖（供安装脚本/自检使用）
     CheckDeps,
+    /// 打印所有生效路径（排障用）
+    PrintPaths,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -102,6 +104,9 @@ pub fn parse(raw: Vec<String>) -> ParseOutcome {
             }
             "--check-deps" => {
                 action = Action::CheckDeps;
+            }
+            "--print-paths" => {
+                action = Action::PrintPaths;
             }
             "-V" | "--version" => {
                 // --version 直接中断扫描（不需要解析路径）

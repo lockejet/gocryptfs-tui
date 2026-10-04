@@ -1213,3 +1213,40 @@ fn startup_dep_warning_is_visible_in_output() {
         "输出区缺少安装命令:\n{text}"
     );
 }
+
+/// `--print-paths`：排障时要能一眼看清实际使用的二进制/后端/配置/数据路径。
+#[test]
+fn print_paths_report_lists_effective_paths() {
+    let _guard = lock_lang();
+    let dir = std::env::temp_dir().join("gocryptfs-tui-paths-test");
+    let cfg = "/tmp/print-paths-config.yaml";
+    for lang in [i18n::Lang::ZhCn, i18n::Lang::EnUs] {
+        i18n::set_lang(lang);
+        let lines = print_paths_lines(
+            cfg,
+            &dir,
+            &dir.join("app.log.jsonl"),
+            &dir.join("history.jsonl"),
+            &dir.join("HELP.md"),
+        );
+        let text = lines.join("\n");
+        assert!(!text.contains("paths."), "有键未翻译:\n{text}");
+        for expect in [
+            cfg,
+            dir.join("backend").to_string_lossy().to_string().as_str(),
+            dir.join("app.log.jsonl")
+                .to_string_lossy()
+                .to_string()
+                .as_str(),
+            dir.join("history.jsonl")
+                .to_string_lossy()
+                .to_string()
+                .as_str(),
+            dir.join("HELP.md").to_string_lossy().to_string().as_str(),
+            version_string().as_str(),
+        ] {
+            assert!(text.contains(expect), "{:?} 不在报告里:\n{text}", expect);
+        }
+    }
+    i18n::set_lang(i18n::Lang::ZhCn);
+}

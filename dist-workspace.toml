@@ -14,4 +14,13 @@ targets = ["aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu", "x86_64-unkn
 # Path that installers should place binaries in
 install-path = "~/.local/bin/"
 # Whether to install an updater program
+# 关掉：不产出 gocryptfs-tui-update / 安装 receipt，三种安装方式升级方式一致
 install-updater = false
+
+# 关于运行时依赖（gocryptfs / yq / jq / rsync …）：
+#   * cargo-dist 的 shell 安装器**不能**执行自定义安装逻辑，也不会替用户装系统依赖；
+#   * 它还**会丢弃归档里除二进制以外的文件**（见 cargo-dist 文档 installers/shell.md），
+#     所以 Shell 后端必须是"内嵌进 TUI 二进制、首次运行释放"（见 src/backend.rs）；
+#   * cargo-dist 的 dependencies（apt/homebrew，stage=run）只对 Homebrew formula / MSI 生效，
+#     本项目只构建 Linux 目标，故不声明；
+#   * 依赖检查改为三处提示：install.sh 安装后、TUI 首次运行、`gocryptfs-tui --check-deps`。

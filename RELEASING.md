@@ -110,3 +110,31 @@ make changelog            # 合并进 [Unreleased]（片段保留，可反复生
   （`cliff.toml` 已配置跳过）。
 - 发布时（`make release`）片段会并入新版本段并归档到 `changelog.d/archive/`。
 - 详情见 `changelog.d/README.md`。
+
+---
+
+## 发布后检查（依赖与安装说明）
+
+cargo-dist 会用 **CHANGELOG 生成 GitHub Release 说明**，因此运行时依赖清单随
+`changelog.d/` 片段进入 Release 页面（shell 安装器本身不能提示系统依赖）。
+
+发布后确认一次：
+
+```bash
+gh release view v0.3.0 --json body --jq .body | grep -A 3 "运行时依赖"
+```
+
+若说明里缺依赖清单（例如片段没写），手工补一段：
+
+```bash
+body="$(gh release view v0.3.0 --json body --jq .body)"
+printf '%s\n\n## 运行时依赖\n\n- gocryptfs / fusermount(fuse3) / rsync / yq(Go v4) / jq / mountpoint(util-linux)\n- 可选: tree\n- 检查: `gocryptfs-tui --check-deps`\n' "$body" \
+  | gh release edit v0.3.0 --notes-file -
+```
+
+同时确认安装落点已切到 `~/.local/bin`（本次变更由 CI 在发布时生成安装脚本）：
+
+```bash
+curl -LsSf https://github.com/lockejet/gocryptfs-tui/releases/latest/download/gocryptfs-tui-installer.sh \
+  | grep -m1 '_install_dir='
+```

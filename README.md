@@ -254,6 +254,7 @@ OPTIONS:
                            [默认: ~/.local/share/gocryptfs-tui]
     -l, --lang <CODE>      界面语言，可选 zh-CN / en-US
         --check-deps       检查运行时依赖并给出安装命令
+        --print-paths      打印所有生效路径（排障）
     -h, --help             显示帮助
     -V, --version          显示版本信息
 ```
@@ -286,6 +287,9 @@ gocryptfs-tui --version
 
 # 查看帮助
 gocryptfs-tui --help
+
+# 排障：一次看清实际使用的二进制/后端/配置/数据/日志路径
+gocryptfs-tui --print-paths
 ```
 
 TUI 顶部栏实时显示三行信息：

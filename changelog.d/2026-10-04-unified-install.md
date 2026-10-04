@@ -20,3 +20,9 @@
 - README「安装」改为"三种方式 → 同一套路径"对照表 + 统一自检三连
   （`command -v` / `--version` / `--check-deps`）+ 卸载清理说明；
   配置/数据目录补上 XDG 与环境变量优先级
+
+### Documentation
+- 运行时依赖清单（安装前请确认）：`gocryptfs`、`fusermount`（`fuse3`）、`rsync`、
+  `yq`（**mikefarah Go 版 v4**）、`jq`、`mountpoint`（`util-linux`）；可选 `tree`。
+  检查：`gocryptfs-tui --check-deps`（缺必需依赖时退出码非 0，并打印安装命令）
+- 新增 `gocryptfs-tui --print-paths`：一次打印实际使用的二进制/后端/配置/数据/日志路径（排障）

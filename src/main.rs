@@ -3876,6 +3876,67 @@ fn run_app<B: Backend>(
     }
 }
 
+// ---------- 打印生效路径 ----------
+
+/// 组装 `--print-paths` 的报告行（排障用：一眼看清实际用的是哪份二进制/后端/配置/数据）
+fn print_paths_lines(
+    config: &str,
+    data_dir: &Path,
+    log_file: &Path,
+    history_file: &Path,
+    help_file: &Path,
+) -> Vec<String> {
+    const LABELS: [&str; 10] = [
+        "paths.label_bin",
+        "paths.label_version",
+        "paths.label_backend",
+        "paths.label_backend_dir",
+        "paths.label_config",
+        "paths.label_data",
+        "paths.label_log",
+        "paths.label_history",
+        "paths.label_help",
+        "paths.label_lang",
+    ];
+    let w = label_column(&LABELS);
+    let row = |key: &'static str, value: String| format!("  {}{}", pad_label(t!(key), w), value);
+
+    // 后端的来源：GOCRYPTFS_CLI > 内嵌释放副本 > PATH
+    let backend = cli_path();
+    let source = if std::env::var("GOCRYPTFS_CLI")
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false)
+    {
+        t!("paths.source_env")
+    } else if backend::embedded_path().is_some() {
+        t!("paths.source_embedded")
+    } else if resolved_cli_path() != CLI_NAME {
+        t!("paths.source_path")
+    } else {
+        t!("paths.source_missing")
+    };
+    let backend_dir = backend::extract_dir(data_dir);
+
+    vec![
+        t!("paths.header").to_string(),
+        row("paths.label_bin", bin_path()),
+        row("paths.label_version", version_string()),
+        row(
+            "paths.label_backend",
+            t!("paths.backend_line", backend, source).to_string(),
+        ),
+        row("paths.label_backend_dir", backend_dir.display().to_string()),
+        row("paths.label_config", config.to_string()),
+        row("paths.label_data", data_dir.display().to_string()),
+        row("paths.label_log", log_file.display().to_string()),
+        row("paths.label_history", history_file.display().to_string()),
+        row("paths.label_help", help_file.display().to_string()),
+        row("paths.label_lang", i18n::lang().code().to_string()),
+        String::new(),
+        t!("paths.hint").to_string(),
+    ]
+}
+
 // ---------- 打印帮助 ----------
 
 fn print_help(app_config: &str, data_dir: &Path, log_file: &Path, history_file: &Path) {
@@ -3897,6 +3958,8 @@ fn print_help(app_config: &str, data_dir: &Path, log_file: &Path, history_file: 
     println!("{}", current(data_dir.display().to_string()));
     println!("{}", t!("clihelp.opt_lang"));
     println!("{}", current(i18n::lang().code().to_string()));
+    println!("{}", t!("clihelp.opt_check_deps"));
+    println!("{}", t!("clihelp.opt_print_paths"));
     println!("{}", t!("clihelp.opt_help"));
     println!("{}", t!("clihelp.opt_version"));
     println!();
@@ -3972,6 +4035,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         cli::Action::Version => {
             print_version();
+            return Ok(());
+        }
+        cli::Action::PrintPaths => {
+            for line in print_paths_lines(&config, &data_dir, &log_file, &history_file, &help_file)
+            {
+                println!("{}", line);
+            }
             return Ok(());
         }
         cli::Action::CheckDeps => {

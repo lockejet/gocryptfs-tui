@@ -216,5 +216,14 @@ else
     check "--check-deps 给出安装命令" "1" "$has_hint"
 fi
 
+# 16. --print-paths：排障报告包含 -D 指定的数据目录与 -c 指定的配置
+out="$("$BIN" --print-paths -c "$CONFIG_ZH" -D "$TMP/pp" 2>&1)"
+printf '%s' "$out" | grep -q "$TMP/pp/app.log.jsonl" && v=1 || v=0
+check "--print-paths 含数据目录" "1" "$v"
+printf '%s' "$out" | grep -q "$CONFIG_ZH" && v=1 || v=0
+check "--print-paths 含配置路径" "1" "$v"
+printf '%s' "$out" | grep -q "paths\." && v=0 || v=1
+check "--print-paths 无未翻译键" "1" "$v"
+
 echo "===== 结果: $PASS 通过, $FAIL 失败 ====="
 [ "$FAIL" -eq 0 ] || exit 1
