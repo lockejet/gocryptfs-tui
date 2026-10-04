@@ -2,7 +2,7 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/)。
 
-## [Unreleased]
+## [0.4.0] - 2026-10-04
 
 ### Features
 - `install.sh` 支持直接从 GitHub Release 安装：`--from-release` / `--version vX.Y.Z` /
