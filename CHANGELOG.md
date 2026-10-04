@@ -2,7 +2,7 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/)。
 
-## [Unreleased]
+## [0.5.1] - 2026-10-04
 
 ### Testing
 - 新增渲染测试：页签行不再包含分页提示；页面行 `Page: [n]` 为黄色、动作提示为白色（中英双语）
