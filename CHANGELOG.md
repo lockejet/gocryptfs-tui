@@ -2,7 +2,7 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/)。
 
-## [Unreleased]
+## [0.3.0] - 2026-10-04
 
 ### Features
 - Shell 后端与 Rust 侧路径规则对齐：支持 `XDG_CONFIG_HOME` / `XDG_DATA_HOME`
