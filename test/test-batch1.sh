@@ -133,6 +133,18 @@ out=$(bash "$CLI" -c "$CONFIG" list 2>/dev/null | tail -n +3 | wc -l | tr -d ' '
 check "list 表格模式卷数" "2" "$out"
 
 echo ""
+# 15. 缺 yq 时 list 必须报错（不能静默返回 0 个卷，否则 TUI 只看到空列表）
+tmpbin="$(mktemp -d)"
+for c in jq mountpoint dirname readlink bash; do
+    p="$(command -v "$c" 2>/dev/null)" && ln -sf "$p" "$tmpbin/$c"
+done
+err="$(env -i PATH="$tmpbin" HOME="$HOME" LC_ALL=C bash "$CLI" -c "$CONFIG" list --json 2>&1 >/dev/null)"
+rc=$?
+loud=0
+printf '%s' "$err" | grep -q '缺少依赖' && [ "$rc" -ne 0 ] && loud=1
+check "缺 yq 时 list 报错且退出码非 0" "1" "$loud"
+rm -rf "$tmpbin"
+
 echo "===== 结果 ====="
 echo "PASS: $PASS"
 echo "FAIL: $FAIL"

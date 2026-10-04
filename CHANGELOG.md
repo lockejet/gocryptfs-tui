@@ -2,18 +2,19 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/)。
 
-## [0.2.1] - 2026-10-03
-
-### Features
-- TUI 二进制内嵌 Shell 后端（`gocryptfs-cli` + `lib/{gocryptfs-lib.sh,i18n.sh}`）：
-  首次运行时释放到 `~/.local/share/gocryptfs-tui/backend/`（内容未变不重写，升级自动更新），
-  安装一次即可用，且后端版本始终与 TUI 配套，不再受系统旧后端影响
-- 后端路径优先级：`GOCRYPTFS_CLI` > 内嵌释放副本 > PATH 中的 `gocryptfs-cli`；
-  `--help` 的「CLI 可执行文件路径」改为显示实际使用的后端
+## [Unreleased]
 
 ### Bug Fixes
-- 修复从 GitHub Release 安装后启动报「执行 CLI 失败」：发行包（cargo-dist）只含 Rust 二进制，
-  `gocryptfs-cli` 与 Shell 库并未随之分发
+- `gocryptfs-cli list` 在缺少 `yq`/`jq`/`mountpoint` 时不再静默返回 0 个卷，改为明确报错
+  （此前 TUI 只会显示一个空列表，无从判断原因）
+- TUI 列表为空时直接显示原因：加载失败（红色，含 CLI 报错原文与「按 r 重试」提示）
+  或「配置里没有卷: <路径>」（含「按 e 编辑配置」提示）；此前只有一行灰色「（无卷）」
+- 错误输出在缺少 `jq` 时也能正常打印（JSON 模式自动降级为纯文本）
+
+## [0.2.1] - 2026-10-03
+
+### Documentation
+- 更新 CHANGELOG
 
 ## [0.2.0] - 2026-10-03
 

@@ -1062,3 +1062,45 @@ fn cli_path_precedence() {
     assert_eq!(cli_path_from(Some("/custom/cli"), None), "/custom/cli");
     assert_eq!(cli_path_from(None, None), CLI_NAME);
 }
+
+/// 列表为空时必须能看出原因（加载失败 / 配置里没有卷），而不是一片空白。
+#[test]
+fn empty_list_shows_reason() {
+    let _guard = lock_lang();
+    let cfg = "/home/user/.config/gocryptfs-tui/config.local.yaml";
+
+    // 1) 加载失败：红色原因 + 重试提示（中文）
+    i18n::set_lang(i18n::Lang::ZhCn);
+    let mut app = test_app();
+    app.config = cfg.to_string();
+    app.load_error = Some("缺少依赖: yq".to_string());
+    let text = render_text(&mut app);
+    assert!(text.contains("缺少依赖: yq"), "未显示失败原因:\n{text}");
+    assert!(
+        text.contains("无法加载卷列表") && text.contains("按 r 重试"),
+        "失败提示不完整:\n{text}"
+    );
+
+    // 2) 配置里没有卷：显示配置路径与下一步
+    let mut app = test_app();
+    app.config = cfg.to_string();
+    let text = render_text(&mut app);
+    assert!(
+        text.contains(cfg) && text.contains("配置里没有卷") && text.contains("按 e 编辑配置"),
+        "空配置提示不完整:\n{text}"
+    );
+
+    // 3) 英文界面
+    i18n::set_lang(i18n::Lang::EnUs);
+    let mut app = test_app();
+    app.config = cfg.to_string();
+    app.load_error = Some("missing deps: yq".to_string());
+    let text = render_text(&mut app);
+    assert!(
+        text.contains("missing deps: yq")
+            && text.contains("Failed to load vault list")
+            && text.contains("Press r to retry"),
+        "英文失败提示缺失:\n{text}"
+    );
+    i18n::set_lang(i18n::Lang::ZhCn);
+}

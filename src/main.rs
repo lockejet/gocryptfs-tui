@@ -715,6 +715,8 @@ struct App {
     status: String,
     /// 状态文字是否用灰色（信息性提示，如"已挂载/未挂载"）
     status_dim: bool,
+    /// 最近一次加载卷列表失败的原因（列表区会直接显示，避免"空列表无解释"）
+    load_error: Option<String>,
     config: String,
     data_dir: PathBuf,
     log_file: PathBuf,
@@ -774,6 +776,7 @@ impl App {
             output: Vec::new(),
             status: t!("status.ready").to_string(),
             status_dim: false,
+            load_error: None,
             config: config.clone(),
             data_dir,
             log_file,
@@ -820,12 +823,16 @@ impl App {
                 Ok(vaults) => {
                     let n = vaults.len();
                     app.vaults = vaults;
+                    app.load_error = None;
                     app.add_output(t!("output.loaded_vaults", n));
                     if n > 0 {
                         app.vault_list_state.select(Some(0));
                     }
                 }
-                Err(e) => app.add_output(t!("output.load_failed", e)),
+                Err(e) => {
+                    app.load_error = Some(e.clone());
+                    app.add_output(t!("output.load_failed", e));
+                }
             }
         }
         app.reload_pending();
@@ -890,6 +897,7 @@ impl App {
         }
         match load_vaults(&self.config) {
             Ok(vaults) => {
+                self.load_error = None;
                 self.vaults = vaults;
                 if !self.vaults.is_empty() {
                     let cur = self.vault_list_state.selected().unwrap_or(0);
@@ -900,7 +908,10 @@ impl App {
                 }
                 self.update_scope_names();
             }
-            Err(e) => self.add_output(t!("output.refresh_failed", e)),
+            Err(e) => {
+                self.load_error = Some(e.clone());
+                self.add_output(t!("output.refresh_failed", e));
+            }
         }
     }
 
@@ -2521,10 +2532,33 @@ fn render_list(f: &mut Frame, app: &mut App, area: Rect) {
     let (items, title): (Vec<ListItem>, String) = match app.page {
         Page::Mount | Page::Remove => {
             let items: Vec<ListItem> = if app.vaults.is_empty() {
-                vec![ListItem::new(Span::styled(
-                    t!("list.no_vault"),
-                    Style::default().fg(Color::Gray),
-                ))]
+                // 空列表必须能看出原因：加载失败 / 配置为空 / 配置里没有卷
+                let mut empty: Vec<ListItem> = Vec::new();
+                if let Some(err) = &app.load_error {
+                    empty.push(ListItem::new(Span::styled(
+                        t!("list.load_failed", err),
+                        Style::default().fg(Color::Red),
+                    )));
+                    empty.push(ListItem::new(Span::styled(
+                        t!("list.load_failed_hint"),
+                        Style::default().fg(Color::Gray),
+                    )));
+                } else if app.config.is_empty() {
+                    empty.push(ListItem::new(Span::styled(
+                        t!("list.no_vault"),
+                        Style::default().fg(Color::Gray),
+                    )));
+                } else {
+                    empty.push(ListItem::new(Span::styled(
+                        t!("list.empty_config", &app.config),
+                        Style::default().fg(Color::Yellow),
+                    )));
+                    empty.push(ListItem::new(Span::styled(
+                        t!("list.empty_hint"),
+                        Style::default().fg(Color::Gray),
+                    )));
+                }
+                empty
             } else {
                 app.vaults
                     .iter()

@@ -96,7 +96,7 @@ emit_done() {
 }
 emit_error() {
     local code="$1" msg="$2"
-    if [ "$JSON_MODE" = true ]; then
+    if [ "$JSON_MODE" = true ] && command -v jq >/dev/null 2>&1; then
         jq -cn --argjson code "$code" --arg msg "$msg" \
             '{status:"error",code:$code,message:$msg}' >&2
     else
@@ -294,6 +294,12 @@ confirm() {
 # § 12. list / info
 cmd_list() {
     require_config
+    # 缺依赖时不能静默返回 0 个卷（TUI 只会显示空列表，无从判断原因）
+    local missing=()
+    for cmd in yq jq mountpoint; do
+        command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
+    done
+    [ ${#missing[@]} -eq 0 ] || emit_error $EXIT_ERROR "$(t deps.missing "${missing[*]}")"
     if [ "$JSON_MODE" = true ]; then _list_json; else _list_table; fi
 }
 _list_json() {
