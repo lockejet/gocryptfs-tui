@@ -1,66 +1,68 @@
 # gocryptfs-tui
 
-一个用于管理 `gocryptfs` 加密卷的 TUI + CLI 工具，运行于 Linux。
+English | [中文](README.zh-CN.md)
 
-- **CLI**（`gocryptfs-cli`）：Shell 后端，功能完整，脚本友好
-- **TUI**（`gocryptfs-tui`）：终端交互界面，日常操作直观
+A TUI + CLI tool for managing `gocryptfs` encrypted vaults on Linux.
 
-TUI 通过调用 CLI 完成所有实际工作，因此两者行为完全一致，可分别独立使用。
+- **CLI** (`gocryptfs-cli`): Shell backend, feature-complete, script-friendly
+- **TUI** (`gocryptfs-tui`): interactive terminal UI, intuitive for everyday operations
 
----
-
-## 目录
-
-- [特性](#特性)
-- [依赖](#依赖)
-- [安装](#安装)
-- [命令行参数](#命令行参数)
-- [多语言（i18n）](#多语言i18n)
-- [配置](#配置)
-- [使用](#使用)
-- [日志与历史](#日志与历史)
-- [架构](#架构)
-- [安全设计](#安全设计)
-- [开发](#开发)
-- [发布](#发布)
-- [许可](#许可)
+The TUI does all of its real work by invoking the CLI, so the two behave identically and can be used independently.
 
 ---
 
-## 特性
+## Table of contents
 
-- 挂载 / 卸载加密卷（挂载点自动权限锁定）
-- 从明文目录创建加密卷（含容量检查、断点续传）
-- 删除加密卷（还原明文，可选保留或删除加密后端）
-- 支持全局设置与任务级覆盖（overrides）
-- 支持 `--dry-run` 预览模式
-- 密码通过 stdin 传递，**永不落盘**
-- 挂载点未挂载时自动 `chmod 555`（只读锁定），挂载时 `chmod 755`
-- 删除加密需输入 `DELETE` 二次确认
-- 支持 SMB 共享场景（挂载点始终存在）
-- **统一的 JSONL 操作日志**（CLI + TUI 共用一份）
-- **TUI 帮助菜单**（含版本信息、路径、快捷键，可导出为 `HELP.md`）
-- **多语言界面**：简体中文 / English，支持 `--lang`、配置 `language:`、环境变量与运行期 `L` 键切换
-- **主流 TUI 键位惯例**：`Tab` / `Shift+Tab` 轮转换区，`1`/`2`/`3` 直达换页
-- **cargo-release + cargo-dist 发布流程**（git tag 触发 CI 多平台构建）
+- [Features](#features)
+- [Dependencies](#dependencies)
+- [Installation](#installation)
+- [Command-line options](#command-line-options)
+- [Internationalization (i18n)](#internationalization-i18n)
+- [Configuration](#configuration)
+- [Usage](#usage)
+- [Logging and history](#logging-and-history)
+- [Architecture](#architecture)
+- [Security design](#security-design)
+- [Development](#development)
+- [Releasing](#releasing)
+- [License](#license)
 
 ---
 
-## 依赖
+## Features
 
-运行时依赖：
+- Mount / unmount vaults (mount point permissions are locked automatically)
+- Create a vault from a plaintext directory (with capacity checks and resumable transfers)
+- Remove a vault (restores plaintext, with the option to keep or delete the cipher backend)
+- Global settings plus per-task overrides
+- `--dry-run` preview mode
+- Passwords are passed via stdin and **never touch disk**
+- When a mount point is unmounted it is automatically `chmod 555` (read-only lock); when mounted it is `chmod 755`
+- Removing a vault requires typing `DELETE` as a second confirmation
+- Supports SMB sharing setups (the mount point always exists)
+- **Unified JSONL operation log** (shared by the CLI + TUI)
+- **TUI help menu** (with version information, paths, and key bindings, exportable to `HELP.md`)
+- **Multilingual UI**: Simplified Chinese / English, switchable via `--lang`, the `language:` config key, an environment variable, or the `L` key at runtime
+- **Mainstream TUI key conventions**: `Tab` / `Shift+Tab` to cycle panes, `1`/`2`/`3` to jump between pages
+- **cargo-release + cargo-dist release pipeline** (a git tag triggers multi-platform CI builds)
 
-| 依赖 | 用途 | 是否必需 |
+---
+
+## Dependencies
+
+Runtime dependencies:
+
+| Dependency | Purpose | Required |
 |------|------|----------|
-| `gocryptfs` | 挂载/卸载加密卷 | 必需 |
-| `fusermount`（`fuse3`） | 卸载 FUSE 挂载 | 必需 |
-| `rsync` | 迁移/还原数据 | 必需 |
-| `yq`（[mikefarah/yq](https://github.com/mikefarah/yq) **Go 版 v4**） | 解析 YAML 配置 | 必需 |
-| `jq` | JSON 输出 | 必需 |
-| `mountpoint`（`util-linux`） | 检测挂载状态 | 必需 |
-| `tree` | `t` 树状视图 | 可选 |
+| `gocryptfs` | Mount/unmount vaults | Required |
+| `fusermount` (`fuse3`) | Unmount FUSE mounts | Required |
+| `rsync` | Migrate/restore data | Required |
+| `yq` ([mikefarah/yq](https://github.com/mikefarah/yq) **Go version v4**) | Parse the YAML config | Required |
+| `jq` | JSON output | Required |
+| `mountpoint` (`util-linux`) | Detect mount status | Required |
+| `tree` | `t` tree view | Optional |
 
-Debian / Ubuntu 安装：
+Debian / Ubuntu install:
 
 ```bash
 sudo apt install gocryptfs fuse3 rsync jq util-linux
@@ -69,220 +71,220 @@ sudo wget -qO /usr/local/bin/yq \
 sudo chmod +x /usr/local/bin/yq
 ```
 
-> ⚠️ `yq` 必须是 **mikefarah Go 版 v4**。Debian/Ubuntu 源里的 `yq` 是 Python 包装版，
-> 语法不同，会导致读不出卷列表（界面里表现为「列表为空」）。
+> ⚠️ `yq` must be **mikefarah's Go version v4**. The `yq` in the Debian/Ubuntu repos is the Python wrapper,
+> which has different syntax and will fail to read the vault list (this shows up in the UI as an "empty list").
 
-检查依赖是否齐全（二选一，TUI 的检查不依赖 Shell 后端是否在 PATH 上）：
+Check whether all dependencies are present (either command works; the TUI check does not depend on the Shell backend being on PATH):
 
 ```bash
-gocryptfs-tui --check-deps     # 推荐：缺什么、怎么装，一并打印；缺必需依赖时退出码 1
+gocryptfs-tui --check-deps     # recommended: prints what is missing and how to install it; exit code 1 when a required dependency is missing
 gocryptfs-cli --check-deps
 ```
 
-- 三种安装模式都会在安装结束后自动跑这项检查并提示（`--no-deps-check` 可跳过）；
-- TUI **首次运行**时若缺必需依赖（或 `yq` 版本不对），会把提示写到输出区，
-  不会只表现为「列表为空」或「执行失败」。
+- All three install modes run this check automatically once installation finishes and print a hint (`--no-deps-check` skips it);
+- On its **first run**, if a required dependency is missing (or the `yq` version is wrong), the TUI writes the hint to the output pane,
+  instead of only showing an "empty list" or "execution failed".
 
 ---
 
-## 安装
+## Installation
 
-**三种模式，同一个脚本、同一套选项**，落点与配置完全一致：
+**Three modes, one script, the same set of options**, installing to identical locations with identical configuration:
 
-| 模式 | 适合 | 命令 | 需要 |
+| Mode | Best for | Command | Needs |
 |---|---|---|---|
-| ① **懒人** | 只想装上 | `curl -LsSf <release>/gocryptfs-tui-install.sh \| sh -s -- --user`（或 `--system`） | `curl` + POSIX sh |
-| ② **git clone** | 想留脚本 / 可重复安装，不想装 Rust | `git clone … && cd gocryptfs-tui && ./install.sh --from-release --user` | `git` + `curl` |
-| ③ **手动（源码）** | 自己编译 / 改代码 | `git clone … && cd gocryptfs-tui && make build && ./install.sh --local --user` | `git` + **cargo** |
+| ① **One-liner** | Just want it installed | `curl -LsSf <release>/gocryptfs-tui-install.sh \| sh -s -- --user` (or `--system`) | `curl` + POSIX sh |
+| ② **git clone** | Want to keep the script / repeatable installs, without installing Rust | `git clone … && cd gocryptfs-tui && ./install.sh --from-release --user` | `git` + `curl` |
+| ③ **Source build** | Build it yourself / change the code | `git clone … && cd gocryptfs-tui && make build && ./install.sh --local --user` | `git` + **cargo** |
 
-落点（三种模式一致）：
+Install locations (identical across all three modes):
 
-| 选项 | 落点 | 说明 |
+| Option | Location | Notes |
 |---|---|---|
-| `--user`（默认） | `~/.local` | 无需 sudo |
-| `--system` | `/usr/local` | 按需 sudo，并默认把 `gocryptfs-cli` 链接到 `/usr/local/bin` |
-| `--prefix DIR` | 自定义 | 例如 `/opt/gocryptfs-tui` |
+| `--user` (default) | `~/.local` | No sudo required |
+| `--system` | `/usr/local` | Uses sudo as needed, and links `gocryptfs-cli` into `/usr/local/bin` by default |
+| `--prefix DIR` | Custom | e.g. `/opt/gocryptfs-tui` |
 
-三种模式都会安装 `<prefix>/bin/gocryptfs-tui` 与 `<prefix>/lib/gocryptfs-tui/`
-（独立 Shell 后端 + `VERSION`），并写安装清单；都**不修改 shell profile**，只打印需要执行的
-`export PATH=…`；配置与数据目录遵循 XDG（见下），与安装方式无关。
+All three modes install `<prefix>/bin/gocryptfs-tui` and `<prefix>/lib/gocryptfs-tui/`
+(the standalone Shell backend + `VERSION`) and write an install manifest; none of them **modify the shell profile** — they
+only print the `export PATH=…` you need to run; config and data directories follow XDG (see below), independent of install method.
 
-### ① 懒人模式（不需要源码、不需要工具链）
+### ① One-liner (no source, no toolchain)
 
 ```bash
-# 用户级 → ~/.local/bin（默认，无需 sudo）
+# User-level → ~/.local/bin (default, no sudo)
 curl -LsSf https://github.com/lockejet/gocryptfs-tui/releases/latest/download/gocryptfs-tui-install.sh | sh
 
-# 系统级 → /usr/local/bin（按需 sudo，并链接独立 CLI）
+# System-level → /usr/local/bin (sudo as needed, and links the standalone CLI)
 curl -LsSf https://github.com/lockejet/gocryptfs-tui/releases/latest/download/gocryptfs-tui-install.sh \
   | sh -s -- --system
 
-# 指定版本
+# Pin a version
 curl -LsSf .../gocryptfs-tui-install.sh | sh -s -- --user --version v0.5.0
 ```
 
-脚本会：判定架构/libc → 下载对应 `tar.xz` 并**校验 sha256** → 从同一 Release 的
-`source.tar.gz` 取 `shell/` 作为独立后端（保证与 TUI 版本配套）→ 跑 `--check-deps`
-→ 写安装清单（`INSTALLED.json` / `INSTALLED.files`）。
+The script will: detect the architecture/libc → download the matching `tar.xz` and **verify its sha256** → fetch
+`shell/` from the same Release's `source.tar.gz` as the standalone backend (guaranteeing it matches the TUI version) → run
+`--check-deps` → write the install manifest (`INSTALLED.json` / `INSTALLED.files`).
 
-> **离线 / 内网**：直接在 [Releases](https://github.com/lockejet/gocryptfs-tui/releases)
-> 下载 `gocryptfs-tui-<target>.tar.xz`，解压后把 `gocryptfs-tui` 放到 `~/.local/bin`
-> 即可（内嵌后端会在首次运行时释放到数据目录）。
+> **Offline / air-gapped**: just download `gocryptfs-tui-<target>.tar.xz` from
+> [Releases](https://github.com/lockejet/gocryptfs-tui/releases), extract it, and put `gocryptfs-tui` in
+> `~/.local/bin` (the embedded backend unpacks itself into the data directory on first run).
 
-### ② git clone 模式（不需要 cargo）
-
-```bash
-git clone https://github.com/lockejet/gocryptfs-tui.git
-cd gocryptfs-tui
-./install.sh --from-release            # 默认取当前 checkout 的 tag；装到 ~/.local
-./install.sh --from-release --system   # 装到 /usr/local
-```
-
-`--from-release` 会取当前 checkout 最近 tag 对应的 Release 资产；不在 git 仓库里时退回 `latest`。
-`./install.sh` 不带模式参数时也会自动判断：有源码且能编译 → 本地编译；否则用 Release 二进制。
-
-### ③ 手动模式（源码 + cargo）
+### ② git clone mode (no cargo required)
 
 ```bash
 git clone https://github.com/lockejet/gocryptfs-tui.git
 cd gocryptfs-tui
-make build                             # 或 cargo build --release
-./install.sh --local                   # 装到 ~/.local
-./install.sh --local --system          # 装到 /usr/local
+./install.sh --from-release            # defaults to the current checkout's tag; installs to ~/.local
+./install.sh --from-release --system   # installs to /usr/local
 ```
 
-`make install` / `make install-system` 是这一模式的便捷封装（等价 `--local --user` /
-`--local --system`）。
+`--from-release` uses the Release assets for the current checkout's most recent tag; outside a git repository it falls back to `latest`.
+`./install.sh` without a mode argument also decides automatically: if the source is present and can be compiled → build locally; otherwise use the Release binary.
 
-### 安装选项（三种模式通用）
+### ③ Source build mode (source + cargo)
 
-| 选项 | 说明 |
+```bash
+git clone https://github.com/lockejet/gocryptfs-tui.git
+cd gocryptfs-tui
+make build                             # or cargo build --release
+./install.sh --local                   # installs to ~/.local
+./install.sh --local --system          # installs to /usr/local
+```
+
+`make install` / `make install-system` are convenience wrappers for this mode (equivalent to `--local --user` /
+`--local --system`).
+
+### Install options (common to all three modes)
+
+| Option | Description |
 |---|---|
-| `--user` / `--system` / `--prefix DIR` | 落点（默认 `~/.local`） |
-| `--local` / `--from-release[=vX.Y.Z]` / `--version vX.Y.Z` | 强制模式或指定版本 |
-| `--uninstall` | 按安装清单精确卸载 |
-| `--link-cli` / `--no-link-cli` | 是否把 `gocryptfs-cli` 链到 `<prefix>/bin` |
-| `--no-deps-check` | 跳过安装后的依赖检查 |
+| `--user` / `--system` / `--prefix DIR` | Install location (default `~/.local`) |
+| `--local` / `--from-release[=vX.Y.Z]` / `--version vX.Y.Z` | Force a mode or pin a version |
+| `--uninstall` | Uninstall exactly what the install manifest lists |
+| `--link-cli` / `--no-link-cli` | Whether to link `gocryptfs-cli` into `<prefix>/bin` |
+| `--no-deps-check` | Skip the post-install dependency check |
 
-安装后统一自检：
+Post-install self-check:
 
 ```bash
-command -v gocryptfs-tui        # 期望 ~/.local/bin/gocryptfs-tui（或 /usr/local/bin）
+command -v gocryptfs-tui        # expect ~/.local/bin/gocryptfs-tui (or /usr/local/bin)
 gocryptfs-tui --version
 gocryptfs-tui --check-deps
-gocryptfs-tui --print-paths     # 排障：一次看清实际使用的全部路径
+gocryptfs-tui --print-paths     # troubleshooting: see every path actually in use at a glance
 ```
 
-> **独立 CLI 的规范位置**：TUI 首次运行会把内嵌后端释放到
-> `${XDG_DATA_HOME:-~/.local/share}/gocryptfs-tui/backend/gocryptfs-cli`，
-> 三种模式一致。想直接在命令行用，可自行软链一次：
+> **Canonical location of the standalone CLI**: on first run the TUI unpacks the embedded backend to
+> `${XDG_DATA_HOME:-~/.local/share}/gocryptfs-tui/backend/gocryptfs-cli`,
+> identically in all three modes. To use it directly from the command line, create a symlink once:
 > ```bash
 > ln -sf "${XDG_DATA_HOME:-$HOME/.local/share}/gocryptfs-tui/backend/gocryptfs-cli" \
 >        "${XDG_BIN_HOME:-$HOME/.local/bin}/gocryptfs-cli"
 > ```
-> `--system` 会自动把 `<prefix>/lib/gocryptfs-tui/gocryptfs-cli` 链接到 `/usr/local/bin`。
+> `--system` links `<prefix>/lib/gocryptfs-tui/gocryptfs-cli` into `/usr/local/bin` automatically.
 
-### 升级
+### Upgrading
 
-TUI 与 Shell 后端（`gocryptfs-cli` + `lib/*.sh`）必须**成套更新**，否则可能出现
-「界面已是英文、输出区仍是中文」这类不一致。内嵌后端随二进制一起更新
-（释放目录 `${XDG_DATA_HOME:-~/.local/share}/gocryptfs-tui/backend/` 内容变化时才重写）。
+The TUI and the Shell backend (`gocryptfs-cli` + `lib/*.sh`) must be **updated as a set**, otherwise you may see
+inconsistencies such as "the UI is already in English but the output pane is still in Chinese". The embedded backend is updated
+along with the binary (the unpack directory `${XDG_DATA_HOME:-~/.local/share}/gocryptfs-tui/backend/` is rewritten only when its contents change).
 
 ```bash
-# ① 懒人：重跑同一条命令
+# ① One-liner: rerun the same command
 curl -LsSf .../gocryptfs-tui-install.sh | sh -s -- --user
 
-# ② clone：git pull 后重跑
+# ② clone: git pull, then rerun
 git pull && ./install.sh --from-release --user
 
-# ③ 手动：重新编译后覆盖安装
+# ③ Source: rebuild, then install over the old version
 git pull && make build && ./install.sh --local --user
 ```
 
-若 TUI 调用的不是新装的后端，可用 `GOCRYPTFS_CLI=$(command -v gocryptfs-cli) gocryptfs-tui`
-临时指定；`gocryptfs-tui --print-paths` 可直接看出实际使用的后端与路径。
+If the TUI is not calling the newly installed backend, you can point it at one temporarily with
+`GOCRYPTFS_CLI=$(command -v gocryptfs-cli) gocryptfs-tui`; `gocryptfs-tui --print-paths` shows the backend and paths actually in use.
 
-### 卸载
+### Uninstalling
 
 ```bash
-# ① 懒人 / ② clone / ③ 手动 都按安装清单精确卸载
+# ① one-liner / ② clone / ③ source all uninstall exactly what the install manifest lists
 curl -LsSf .../gocryptfs-tui-install.sh | sh -s -- --uninstall --user
 curl -LsSf .../gocryptfs-tui-install.sh | sh -s -- --uninstall --system
-./install.sh --uninstall --user            # 本地已有脚本时
+./install.sh --uninstall --user            # when the script is already local
 ./install.sh --uninstall --system
 
-# 便捷封装
-make uninstall                             # 等价 --user
-make uninstall-system                      # 等价 --system
-make uninstall PREFIX=/opt/gocryptfs-tui   # 指定前缀
+# Convenience wrappers
+make uninstall                             # equivalent to --user
+make uninstall-system                      # equivalent to --system
+make uninstall PREFIX=/opt/gocryptfs-tui   # custom prefix
 ```
 
-> 卸载**不删**配置与数据：配置 `${XDG_CONFIG_HOME:-~/.config}/gocryptfs-tui/`、
-> 数据 `${XDG_DATA_HOME:-~/.local/share}/gocryptfs-tui/`（含日志、历史、HELP.md、
-> 内嵌释放的后端）。需要彻底清理时自行删除这两个目录。
+> Uninstalling does **not** delete config or data: config `${XDG_CONFIG_HOME:-~/.config}/gocryptfs-tui/`,
+> data `${XDG_DATA_HOME:-~/.local/share}/gocryptfs-tui/` (including logs, history, HELP.md,
+> and the unpacked embedded backend). Delete these two directories yourself for a full cleanup.
 >
-> `install.sh --uninstall` 读 `<prefix>/lib/gocryptfs-tui/INSTALLED.files` 逐条删除，
-> 只允许删前缀内的路径；`make uninstall` 删除 `$PREFIX/bin/gocryptfs-tui`、
-> `$PREFIX/bin/gocryptfs-cli` 与 `$PREFIX/lib/gocryptfs-tui/`。
+> `install.sh --uninstall` reads `<prefix>/lib/gocryptfs-tui/INSTALLED.files` and deletes the entries one by one,
+> and only allows deleting paths inside the prefix; `make uninstall` deletes `$PREFIX/bin/gocryptfs-tui`,
+> `$PREFIX/bin/gocryptfs-cli`, and `$PREFIX/lib/gocryptfs-tui/`.
 >
-> 0.4.x 及更早用 cargo-dist 的 `-installer.sh` 装过的（`~/.cargo/bin` 或 `~/.local/bin`）：
-> `rm -f ~/.local/bin/gocryptfs-tui ~/.cargo/bin/gocryptfs-tui`。
+> If you installed 0.4.x or earlier with cargo-dist's `-installer.sh` (into `~/.cargo/bin` or `~/.local/bin`):
+> `rm -f ~/.local/bin/gocryptfs-tui ~/.cargo/bin/gocryptfs-tui`.
 
 ---
 
-## 命令行参数
+## Command-line options
 
-TUI 支持以下参数：
+The TUI accepts the following options:
 
 ```
 gocryptfs-tui [OPTIONS]
 
 OPTIONS:
-    -c, --config <PATH>    配置文件路径
-                           [默认: ~/.config/gocryptfs-tui/config.yaml]
-    -D, --data-dir <DIR>   数据目录（日志、历史、帮助）
-                           [默认: ~/.local/share/gocryptfs-tui]
-    -l, --lang <CODE>      界面语言，可选 zh-CN / en-US
-        --check-deps       检查运行时依赖并给出安装命令
-        --print-paths      打印所有生效路径（排障）
-    -h, --help             显示帮助
-    -V, --version          显示版本信息
+    -c, --config <PATH>    Config file path
+                           [default: ~/.config/gocryptfs-tui/config.yaml]
+    -D, --data-dir <DIR>   Data directory (logs, history, help)
+                           [default: ~/.local/share/gocryptfs-tui]
+    -l, --lang <CODE>      UI language, one of zh-CN / en-US
+        --check-deps       Check runtime dependencies and print install commands
+        --print-paths      Print all effective paths (troubleshooting)
+    -h, --help             Show help
+    -V, --version          Show version information
 ```
 
-Shell 后端 `gocryptfs-cli` 提供**同款**全局选项（`-c` / `-D` / `-l` / `-V` / `-h` / `--check-deps`），
-便于脚本里统一调用：
+The Shell backend `gocryptfs-cli` provides the **same** global options (`-c` / `-D` / `-l` / `-V` / `-h` / `--check-deps`),
+which makes it easy to call uniformly from scripts:
 
 ```bash
 gocryptfs-cli --version
 gocryptfs-cli -D /tmp/data -c /path/to/config.yaml list --json
 ```
 
-示例：
+Examples:
 
 ```bash
-# 使用默认配置
+# Use the default config
 gocryptfs-tui
 
-# 指定配置文件
+# Specify a config file
 gocryptfs-tui -c /path/to/config.yaml
 
-# 指定数据目录
+# Specify a data directory
 gocryptfs-tui -D /tmp/gocryptfs-tui-data
 
-# 指定界面语言（本次运行）
+# Specify the UI language (for this run only)
 gocryptfs-tui --lang en-US
 
-# 查看版本
+# Show the version
 gocryptfs-tui --version
 
-# 查看帮助
+# Show help
 gocryptfs-tui --help
 
-# 排障：一次看清实际使用的二进制/后端/配置/数据/日志路径
+# Troubleshooting: see the binaries/backend/config/data/log paths actually in use at a glance
 gocryptfs-tui --print-paths
 ```
 
-TUI 顶部栏实时显示三行信息：
+The TUI top bar shows two lines of live information (line 1: Bin/CLI + version, line 2: Config/Data):
 
 ```
 Bin: /usr/local/bin/gocryptfs-tui  CLI:  /usr/local/lib/gocryptfs-tui/gocryptfs-cli          v0.2.0
@@ -291,126 +293,126 @@ Config: /home/you/.config/gocryptfs-tui/config.yaml  Data: /home/you/.local/shar
 
 ---
 
-## 多语言（i18n）
+## Internationalization (i18n)
 
-界面文案（**TUI + Shell 后端**）支持 **简体中文（`zh-CN`，内置默认）** 与 **English（`en-US`）**。
-TUI 语言在启动时确定，之后可用 `L` 键（或设置浮层内的 `l` 键）在运行期切换（仅当前会话有效）；
-TUI 执行命令时会把当前语言通过 `GOCRYPTFS_LANG` 传给 `gocryptfs-cli`，因此输出区与后端提示语言一致。
+The UI text (**TUI + Shell backend**) supports **Simplified Chinese (`zh-CN`, the built-in default)** and **English (`en-US`)**.
+The TUI language is determined at startup, after which it can be switched at runtime with the `L` key (or the `l` key inside the settings overlay, for the current session only);
+when the TUI runs a command it passes the current language to `gocryptfs-cli` via `GOCRYPTFS_LANG`, so the output pane and the backend hints use the same language.
 
-### 语言选择优先级
+### Language selection priority
 
-从高到低：
+From highest to lowest:
 
 ```
---lang  >  GOCRYPTFS_TUI_LANG  >  配置 language:  >  系统 locale(LANGUAGE / LC_ALL / LC_MESSAGES / LANG)  >  内置默认 zh-CN
+--lang  >  GOCRYPTFS_TUI_LANG  >  config language:  >  system locale (LANGUAGE / LC_ALL / LC_MESSAGES / LANG)  >  built-in default zh-CN
 ```
 
-- 系统 locale 按 POSIX 取 `LC_ALL` > `LC_MESSAGES` > `LANG`，且只识别受支持的语言。
-- `LANGUAGE`（GNU 的冒号分隔偏好列表，如 `zh_CN:en_US`）取第一个可识别的语言，
-  优先于上述 locale，但当有效 locale 为 `C` / `POSIX` 时被忽略。
-- `C` / `POSIX` 表示「不本地化」，此时回落到内置默认 `zh-CN`；未安装的中文 locale
-  （如 `LANG=zh_CN.UTF-8` 但系统无该 locale）不影响识别。
-- 配置文件里的 `language:` 会覆盖系统 locale，适合固定语言偏好。
+- The system locale is resolved per POSIX as `LC_ALL` > `LC_MESSAGES` > `LANG`, and only supported languages are recognized.
+- `LANGUAGE` (GNU's colon-separated preference list, e.g. `zh_CN:en_US`) takes the first recognizable language and
+  takes precedence over the locales above, but is ignored when the effective locale is `C` / `POSIX`.
+- `C` / `POSIX` means "no localization"; in that case it falls back to the built-in default `zh-CN`. A Chinese locale that is
+  not installed (e.g. `LANG=zh_CN.UTF-8` with no such locale on the system) does not affect recognition.
+- The `language:` key in the config file overrides the system locale, which is handy for pinning a language preference.
 
-### 指定语言
+### Specifying the language
 
 ```bash
-# 命令行（最高优先级）
+# Command line (highest priority)
 gocryptfs-tui --lang en-US
 
-# 环境变量（仅本次会话）
+# Environment variable (this session only)
 GOCRYPTFS_TUI_LANG=en-US gocryptfs-tui
 
-# 配置文件（持久化，覆盖系统 locale）
+# Config file (persistent, overrides the system locale)
 # ~/.config/gocryptfs-tui/config.yaml
 language: zh-CN
 
-# 跟随系统 locale
+# Follow the system locale
 LANG=zh_CN.UTF-8 gocryptfs-tui
 
-# Shell 后端同样支持（-l/--lang 或环境变量）
+# The Shell backend supports this too (-l/--lang or the environment variable)
 gocryptfs-cli --lang en-US list
 GOCRYPTFS_LANG=en-US gocryptfs-cli -c ~/.config/gocryptfs-tui/config.yaml list
 ```
 
-### 运行期切换
+### Switching at runtime
 
-| 位置 | 键 | 说明 |
+| Where | Key | Description |
 |------|----|------|
-| 任意页面 | `L` | 在 `zh-CN` / `en-US` 间切换，状态栏与输出区给出提示 |
-| 设置浮层 | `l` / `L` | 同上，浮层保持打开，便于对照 |
-| 帮助 / 历史浮层 | `L` | 同上，浮层保持打开 |
+| Any page | `L` | Toggles between `zh-CN` / `en-US`; the status bar and output pane print a hint |
+| Settings overlay | `l` / `L` | Same as above; the overlay stays open for side-by-side comparison |
+| Help / history overlay | `L` | Same as above; the overlay stays open |
 
-> 运行期切换只影响当前进程；要长期生效请写入配置 `language:` 或使用 `--lang`。
-> 导出的帮助文件（`H`）会跟随当前语言。
-> 切换后会重建作用域名称、目录区内容与任务描述，不留旧语言缓存。
-> TUI 会把当前语言通过 `GOCRYPTFS_LANG` 传给 `gocryptfs-cli`；若输出区语言与界面不符，
-> 多半是调用到了旧版已安装后端（看启动输出里的 `CLI:` 路径，或重新 `make install` / `make install-system`）。
-> 英文界面下若探测到旧版后端，TUI 会在输出区显式告警（`does not support --lang`）。
-> 旧版后端还会向 `app.log.jsonl` 追加纯文本行（破坏 JSONL）；`gocryptfs-cli log` 已能自动跳过，
-> 需要清理历史文件可执行 `grep '^{' app.log.jsonl > tmp && mv tmp app.log.jsonl`。
+> Runtime switching only affects the current process; to make it permanent, write `language:` in the config or use `--lang`.
+> The exported help file (`H`) follows the current language.
+> After switching, scope names, directory pane contents, and task descriptions are rebuilt, with no stale-language cache left behind.
+> The TUI passes the current language to `gocryptfs-cli` via `GOCRYPTFS_LANG`; if the output pane language does not match the UI,
+> it is most likely calling an old installed backend (check the `CLI:` path in the startup output, or rerun `make install` / `make install-system`).
+> In the English UI, if an old backend is detected the TUI prints an explicit warning in the output pane (`does not support --lang`).
+> Old backends also append plain-text lines to `app.log.jsonl` (corrupting the JSONL); `gocryptfs-cli log` already skips them automatically,
+> and to clean up a historical file you can run `grep '^{' app.log.jsonl > tmp && mv tmp app.log.jsonl`.
 
-### 参与翻译 / 新增语言
+### Contributing translations / adding a language
 
-翻译表位于：
+The translation tables live in:
 
 ```
-src/i18n.rs          # TUI：语言枚举、解析优先级、t!/tn! 宏、键表校验测试
-src/i18n/zh_cn.rs    # TUI 简体中文（键 -> 文案，按 key 升序）
+src/i18n.rs          # TUI: language enum, resolution priority, t!/tn! macros, key-table validation tests
+src/i18n/zh_cn.rs    # TUI Simplified Chinese (key -> text, sorted by key ascending)
 src/i18n/en_us.rs    # TUI English
-shell/lib/i18n.sh    # Shell 后端：消息表（I18N_ZH / I18N_EN）与语言解析
+shell/lib/i18n.sh    # Shell backend: message tables (I18N_ZH / I18N_EN) and language resolution
 ```
 
-- 键名形如 `<区域>.<语义>`（如 `status.ready`），文案占位符用 `{}`（按顺序）或 `{name}`（具名）。
-- **标签类文案不要手写对齐空格**（如 `"名称:      "`）：渲染层会按显示宽度
-  （CJK 记 2 列）对同一组标签统一补齐，避免中英文列宽不一致。
-- 新增语言：在 `src/i18n/` 下新建 `<locale>.rs`（复制 `en_us.rs` 的键，翻译值），
-  在 `src/i18n.rs` 的 `Lang` 枚举、`ALL`、`code()/display_name()/table()` 中登记即可。
-- 校验：
+- Keys look like `<area>.<meaning>` (e.g. `status.ready`); placeholders in the text use `{}` (positional) or `{name}` (named).
+- **Do not hand-write alignment spaces in label-style strings** (e.g. `"Name:      "`): the render layer pads all labels
+  in the same group uniformly by display width (CJK counts as 2 columns), avoiding column-width mismatches between Chinese and English.
+- Adding a language: create `<locale>.rs` under `src/i18n/` (copy the keys from `en_us.rs` and translate the values),
+  then register it in the `Lang` enum, `ALL`, and `code()/display_name()/table()` in `src/i18n.rs`.
+- Validation:
 
 ```bash
-make i18n-check                              # 键表一致性 + 调用点参数 + 中文残留（自带自检）
-cargo test i18n                              # 翻译表与渲染层单元测试
-make test-i18n                               # TUI + Shell 的语言解析/文案验收
+make i18n-check                              # key-table consistency + call-site arguments + leftover Chinese (with its own self-check)
+cargo test i18n                              # translation-table and render-layer unit tests
+make test-i18n                               # TUI + Shell language-resolution/text acceptance tests
 ```
 
-Shell 侧约定：文案模板放在 `shell/lib/i18n.sh`，只允许 `printf` 的 `%s` 占位符；
-调用方式为 `t <key> [args...]`（不换行）与 `te <key> [args...]`（换行）。
+Shell-side convention: message templates live in `shell/lib/i18n.sh` and may only use `printf`'s `%s` placeholders;
+call them as `t <key> [args...]` (no newline) and `te <key> [args...]` (with newline).
 
 ---
 
-## 配置
+## Configuration
 
-### 配置文件位置
+### Config file location
 
-默认（遵循 XDG，`XDG_CONFIG_HOME` 生效）：
+Default (XDG-aware, `XDG_CONFIG_HOME` is honored):
 
 ```
 ${XDG_CONFIG_HOME:-~/.config}/gocryptfs-tui/config.yaml
 ```
 
-优先级：`-c/--config` > `GOCRYPTFS_CONFIG` > `CONFIG_FILE`（兼容）> `XDG_CONFIG_HOME` > `~/.config`。
+Priority: `-c/--config` > `GOCRYPTFS_CONFIG` > `CONFIG_FILE` (legacy) > `XDG_CONFIG_HOME` > `~/.config`.
 
-数据目录（日志 `app.log.jsonl`、历史 `history.jsonl`、`HELP.md`、内嵌后端）同理：
+The data directory (log `app.log.jsonl`, history `history.jsonl`, `HELP.md`, embedded backend) works the same way:
 
 ```
 ${XDG_DATA_HOME:-~/.local/share}/gocryptfs-tui/
 ```
 
-优先级：`-D/--data-dir`（CLI 与 TUI 都支持）> `GOCRYPTFS_DATA_DIR` >
-`LOG_FILE`/`HISTORY_FILE`（TUI 给子进程用）> `XDG_DATA_HOME` > `~/.local/share`。
+Priority: `-D/--data-dir` (supported by both the CLI and the TUI) > `GOCRYPTFS_DATA_DIR` >
+`LOG_FILE`/`HISTORY_FILE` (used by the TUI for child processes) > `XDG_DATA_HOME` > `~/.local/share`.
 
-可用 `-c` 指定其他路径：
+Use `-c` to specify another path:
 
 ```bash
 gocryptfs-cli -c /path/to/config.yaml list
 gocryptfs-tui -c /path/to/config.yaml
 ```
 
-### 最小配置
+### Minimal config
 
 ```yaml
-# 界面语言（可选）：zh-CN / en-US；省略时跟随系统 locale
+# UI language (optional): zh-CN / en-US; follows the system locale when omitted
 language: zh-CN
 
 settings:
@@ -426,59 +428,59 @@ vaults:
 pending: []
 ```
 
-### 完整配置示例
+### Full config example
 
-参考 `examples/config.yaml.example`，字段含义：
+See `examples/config.yaml.example`; field meanings:
 
-- `language`：界面语言（`zh-CN` / `en-US`），优先级高于系统 locale
-- `settings.unlock_mode`：挂载前 chmod 权限，默认 `"755"`
-- `settings.lock_mode`：未挂载时 chmod 权限，默认 `"555"`
-- `settings.gocryptfs.*`：gocryptfs 挂载选项（`allow_other`、`read_only` 等）
-- `settings.rsync.*`：rsync 迁移选项（`archive`、`compress`、`partial` 等）
-- `settings.filters[]`：rsync 过滤器规则
-- `settings.create.*`：创建策略（`keep_source`、`tmp_mount_suffix`）
-- `settings.remove.*`：删除策略（`restore`、`direct_delete_cipher`）
-- `settings.logging.*`：日志级别与轮转（`level`、`max_size`、`max_files`）
-- `vaults[]`：卷列表，每项含 `id`、`name`、`path`、`mount_point`、可选 `overrides`
-- `pending[]`：待处理目录列表（用于 TAB2 创建向导）
+- `language`: UI language (`zh-CN` / `en-US`), takes priority over the system locale
+- `settings.unlock_mode`: chmod permission before mounting, default `"755"`
+- `settings.lock_mode`: chmod permission while unmounted, default `"555"`
+- `settings.gocryptfs.*`: gocryptfs mount options (`allow_other`, `read_only`, etc.)
+- `settings.rsync.*`: rsync migration options (`archive`, `compress`, `partial`, etc.)
+- `settings.filters[]`: rsync filter rules
+- `settings.create.*`: creation policy (`keep_source`, `tmp_mount_suffix`)
+- `settings.remove.*`: removal policy (`restore`, `direct_delete_cipher`)
+- `settings.logging.*`: log level and rotation (`level`, `max_size`, `max_files`)
+- `vaults[]`: vault list; each entry has `id`, `name`, `path`, `mount_point`, and an optional `overrides`
+- `pending[]`: list of directories to process (used by the TAB2 creation wizard)
 
-### 生效顺序
+### Precedence
 
 ```
-内置默认 < 全局 settings < 任务 overrides < 命令行参数
+built-in defaults < global settings < task overrides < command-line options
 ```
 
-### 策略型选项
+### Policy options
 
-以下选项在向导中遵循"**只允许收紧，不允许放宽**"原则：
+The following options follow the "**only tighten, never loosen**" principle in the wizard:
 
-| 配置项 | 值 | 向导行为 |
+| Config key | Value | Wizard behavior |
 |--------|----|---------|
-| `create.keep_source` | `false` | 可勾选保留源文件 |
-| `create.keep_source` | `true` | 灰色只读 |
-| `remove.restore` | `true` | 灰色只读 |
-| `remove.restore` | `false` | 可勾选还原 |
-| `remove.direct_delete_cipher` | `true` | 可勾选取消 |
-| `remove.direct_delete_cipher` | `false` | 灰色只读 |
+| `create.keep_source` | `false` | Keeping source files can be checked |
+| `create.keep_source` | `true` | Greyed out, read-only |
+| `remove.restore` | `true` | Greyed out, read-only |
+| `remove.restore` | `false` | Restoring can be checked |
+| `remove.direct_delete_cipher` | `true` | Can be unchecked |
+| `remove.direct_delete_cipher` | `false` | Greyed out, read-only |
 
-### 日志设置
+### Logging settings
 
 ```yaml
 settings:
   logging:
-    # operation   只记业务操作（mount/umount/create/remove）——推荐
-    # interactive 业务操作 + 用户交互（按键/页面/向导步骤）
-    # debug       全部记录（含内部事件）
+    # operation   log business operations only (mount/umount/create/remove) — recommended
+    # interactive business operations + user interaction (keys/pages/wizard steps)
+    # debug       log everything (including internal events)
     level: operation
-    # 单个日志文件上限（字节），超出后轮转
+    # Maximum size of a single log file (bytes); rotates once exceeded
     max_size: 5242880      # 5 MB
-    # 保留的历史文件个数
+    # Number of historical files to keep
     max_files: 3
 ```
 
 ---
 
-## 使用
+## Usage
 
 ### CLI
 
@@ -486,64 +488,64 @@ settings:
 gocryptfs-cli [-c <config>] [-l <lang>] <command> [options]
 ```
 
-常用命令：
+Common commands:
 
 ```bash
-# 列出卷
+# List vaults
 gocryptfs-cli list
 gocryptfs-cli list --json
 
-# 卷详情
+# Vault details
 gocryptfs-cli info my_vault
 
-# 挂载（密码通过 stdin）
+# Mount (password via stdin)
 echo 'your-password' | gocryptfs-cli mount my_vault
 
-# 卸载（失败可加 --force）
+# Unmount (add --force if it fails)
 gocryptfs-cli umount my_vault
 gocryptfs-cli umount my_vault --force
 
-# 查看挂载点目录
+# View the mount point directory
 gocryptfs-cli ls my_vault
 gocryptfs-cli tree my_vault
 
-# 从明文目录创建加密卷（dry-run 预览）
+# Create a vault from a plaintext directory (dry-run preview)
 gocryptfs-cli create /srv/photos --name photos --dry-run
 
-# 真实创建（--yes 跳过二次确认）
+# Real creation (--yes skips the second confirmation)
 echo 'your-password' | gocryptfs-cli create /srv/photos --name photos --yes
 
-# 删除加密（还原明文）
+# Remove a vault (restore plaintext)
 echo 'your-password' | gocryptfs-cli remove photos --yes
 
-# 删除加密（保留加密后端）
+# Remove a vault (keep the cipher backend)
 echo 'your-password' | gocryptfs-cli remove photos --keep-cipher --yes
 
-# 查看操作日志
-gocryptfs-cli log                       # 最近 20 条
-gocryptfs-cli log --src tui             # 只看 TUI
-gocryptfs-cli log --action mount        # 只看挂载
-gocryptfs-cli log --result failed       # 只看失败
-gocryptfs-cli log --follow              # 实时跟踪
-gocryptfs-cli log --json                # JSON 输出
+# View the operation log
+gocryptfs-cli log                       # last 20 entries
+gocryptfs-cli log --src tui             # TUI only
+gocryptfs-cli log --action mount        # mount only
+gocryptfs-cli log --result failed       # failures only
+gocryptfs-cli log --follow              # follow in real time
+gocryptfs-cli log --json                # JSON output
 
-# 检查依赖
+# Check dependencies
 gocryptfs-cli --check-deps
 ```
 
-退出码：
+Exit codes:
 
-| 码 | 含义 |
+| Code | Meaning |
 |----|------|
-| 0 | 成功 |
-| 1 | 通用错误 |
-| 2 | 密码错误 |
-| 3 | 状态错误 |
-| 4 | 挂载点问题 |
-| 5 | 磁盘空间不足 |
-| 6 | 卸载失败 |
-| 7 | 强制卸载失败 |
-| 8 | 配置错误 |
+| 0 | Success |
+| 1 | Generic error |
+| 2 | Wrong password |
+| 3 | Wrong state |
+| 4 | Mount point problem |
+| 5 | Not enough disk space |
+| 6 | Unmount failed |
+| 7 | Forced unmount failed |
+| 8 | Configuration error |
 
 ### TUI
 
@@ -551,116 +553,116 @@ gocryptfs-cli --check-deps
 gocryptfs-tui
 ```
 
-界面分为 3 个页面：
+The UI is divided into 3 pages:
 
-| 页面 | 名称 | 功能 |
+| Page | Name | Function |
 |------|------|------|
-| `[1]` | 挂载 / 卸载 | 日常挂载、卸载、查看目录 |
-| `[2]` | 创建加密 | 从明文目录创建 |
-| `[3]` | 删除加密 | 删除加密卷还原明文 |
+| `[1]` | Mount / unmount | Everyday mounting, unmounting, and browsing directories |
+| `[2]` | Create vault | Create from a plaintext directory |
+| `[3]` | Remove vault | Remove a vault and restore plaintext |
 
-界面分为 4 个焦点区（列表 / 详情 / 目录 / 输出），通过 `Tab` 轮转换区，或 `Alt+数字` 直达。
+The UI is divided into 4 focus panes (list / details / directory / output); cycle through them with `Tab`, or jump directly with `Alt+number`.
 
-#### 换页与换区（所有页面）
+#### Page and pane switching (all pages)
 
-| 键 | 功能 | 类别 |
+| Key | Function | Category |
 |----|------|------|
-| `1` / `2` / `3` | 直达换页（挂载 / 创建 / 删除） | 换页 |
-| `[` / `]` | 顺序换页（上一页 / 下一页，均循环） | 换页 |
-| `Tab` / `Shift+Tab` | 轮转换区（正向 / 反向） | 换区 |
-| `Alt+1` / `Alt+2` / `Alt+3` / `Alt+4` | 直达换区（列表 / 详情 / 目录 / 输出） | 换区 |
+| `1` / `2` / `3` | Jump to page (mount / create / remove) | Page |
+| `[` / `]` | Cycle pages (previous / next, both wrap around) | Page |
+| `Tab` / `Shift+Tab` | Cycle panes (forward / backward) | Pane |
+| `Alt+1` / `Alt+2` / `Alt+3` / `Alt+4` | Jump to pane (list / details / directory / output) | Pane |
 
-#### 全局按键（所有页面）
+#### Global keys (all pages)
 
-| 键 | 功能 |
+| Key | Function |
 |----|------|
-| `s` | 设置浮层 |
-| `h` | 历史浮层 |
-| `e` | 外部编辑器打开配置 |
-| `r` | 刷新 |
-| `L` | 切换界面语言（zh-CN / en-US） |
-| `?` | 帮助浮层（内含 `H` 导出） |
-| `q` | 退出 |
-| `Ctrl+C` | 中断当前任务 |
-| `Ctrl+D` × 3（2 秒内） | 强制退出 |
+| `s` | Settings overlay |
+| `h` | History overlay |
+| `e` | Open the config in an external editor |
+| `r` | Refresh |
+| `L` | Switch the UI language (zh-CN / en-US) |
+| `?` | Help overlay (includes `H` to export) |
+| `q` | Quit |
+| `Ctrl+C` | Interrupt the current task |
+| `Ctrl+D` × 3 (within 2 seconds) | Force quit |
 
-#### 列表焦点按键
+#### List pane keys
 
-| 键 | 功能 |
+| Key | Function |
 |----|------|
-| `j` / `k` / `↑` / `↓` | 移动选中 |
-| `Space` | 确认选中当前项（出现 `▶` 前缀） |
-| `Enter` | 仅浮层内确认（向导/密码/历史等）；列表页不再使用 |
-| `m` | 挂载（TAB1）；已挂载时只给灰色提示 |
-| `u` | 卸载（TAB1）；未挂载时只给灰色提示 |
-| `c` | 创建向导（TAB2） |
-| `d` | 删除向导（TAB3） |
-| `l` | 列表（ls -la）→ 加载到目录区并切换焦点 |
-| `t` | 树状（tree）→ 加载到目录区并切换焦点 |
+| `j` / `k` / `↑` / `↓` | Move the selection |
+| `Space` | Confirm the current item (a `▶` prefix appears) |
+| `Enter` | Confirm inside overlays only (wizard/password/history, etc.); no longer used on list pages |
+| `m` | Mount (TAB1); when already mounted, only a grey hint is shown |
+| `u` | Unmount (TAB1); when not mounted, only a grey hint is shown |
+| `c` | Creation wizard (TAB2) |
+| `d` | Removal wizard (TAB3) |
+| `l` | List (ls -la) → load into the directory pane and move focus there |
+| `t` | Tree (tree) → load into the directory pane and move focus there |
 
-> **重要**：先按 `Space` 选中，再按 `m`/`u`/`c`/`d` 执行（TAB1 用 `m` 挂载、`u` 卸载；TAB2/TAB3 用 `c`/`d` 进入向导，`Enter` 不再触发）。移动光标会清除选中状态。
+> **Important**: press `Space` to select first, then `m`/`u`/`c`/`d` to act (on TAB1 use `m` to mount and `u` to unmount; on TAB2/TAB3 use `c`/`d` to enter the wizard — `Enter` no longer triggers it). Moving the cursor clears the selection.
 
-#### 详情 / 目录 / 输出焦点按键
+#### Details / directory / output pane keys
 
-| 键 | 功能 |
+| Key | Function |
 |----|------|
-| `↑` / `↓` | 垂直滚动 |
-| `←` / `→` | 水平滚动 |
-| `PgUp` / `PgDn` | 翻页 |
-| `g` / `G` | 跳到首 / 尾 |
-| `c` | 清空（目录区 / 输出区） |
-| `l` / `t` | 刷新目录视图（仅目录焦点） |
+| `↑` / `↓` | Scroll vertically |
+| `←` / `→` | Scroll horizontally |
+| `PgUp` / `PgDn` | Page up / down |
+| `g` / `G` | Jump to the top / bottom |
+| `c` | Clear (directory pane / output pane) |
+| `l` / `t` | Refresh the directory view (directory focus only) |
 
-#### 向导内按键
+#### Wizard keys
 
-| 键 | 功能 |
+| Key | Function |
 |----|------|
-| `Space` | 切换选项 |
-| `j` / `k` | 选项间移动 |
-| `Enter` | 下一步 |
-| `Esc` | 取消 |
-| `Backspace` / `Delete` / `Ctrl+H` | 删除密码字符 |
+| `Space` | Toggle an option |
+| `j` / `k` | Move between options |
+| `Enter` | Next step |
+| `Esc` | Cancel |
+| `Backspace` / `Delete` / `Ctrl+H` | Delete a password character |
 
-#### 历史浮层按键
+#### History overlay keys
 
-| 键 | 功能 |
+| Key | Function |
 |----|------|
-| `j` / `k` / `↑` / `↓` | 移动选中 |
-| `s` | 循环切换来源过滤（全部 → cli → tui → 全部） |
-| `r` | 循环切换结果过滤（全部 → success → failed → started → cancelled → 全部） |
-| `a` | 循环切换操作过滤（全部 → mount → umount → create → remove → 全部） |
-| `Esc` | 关闭 |
+| `j` / `k` / `↑` / `↓` | Move the selection |
+| `s` | Cycle the source filter (all → cli → tui → all) |
+| `r` | Cycle the result filter (all → success → failed → started → cancelled → all) |
+| `a` | Cycle the action filter (all → mount → umount → create → remove → all) |
+| `Esc` | Close |
 
-#### 帮助浮层按键
+#### Help overlay keys
 
-| 键 | 功能 |
+| Key | Function |
 |----|------|
-| `H` | 导出帮助到 `<data_dir>/HELP.md`（跟随当前语言） |
-| `Esc` / `?` / `q` | 关闭 |
+| `H` | Export help to `<data_dir>/HELP.md` (follows the current language) |
+| `Esc` / `?` / `q` | Close |
 
-#### 设置浮层按键
+#### Settings overlay keys
 
-| 键 | 功能 |
+| Key | Function |
 |----|------|
-| `Tab` | 切换作用域（全局 / 各卷） |
-| `g` / `r` / `f` / `p` | 切换分类（gocryptfs / rsync / filters / 权限） |
-| `l` | 切换界面语言 |
-| `e` | 外部编辑器打开配置 |
-| `Esc` | 关闭 |
+| `Tab` | Switch scope (global / individual vaults) |
+| `g` / `r` / `f` / `p` | Switch category (gocryptfs / rsync / filters / permissions) |
+| `l` | Switch the UI language |
+| `e` | Open the config in an external editor |
+| `Esc` | Close |
 
 ---
 
-## 日志与历史
+## Logging and history
 
-### 统一日志
+### Unified log
 
-CLI 和 TUI 的所有操作记录到**同一个文件**：
+Every operation from the CLI and the TUI is recorded in **the same file**:
 
 ```
 ~/.local/share/gocryptfs-tui/app.log.jsonl
 ```
 
-每行一条 JSON 记录：
+One JSON record per line:
 
 ```json
 {
@@ -675,67 +677,67 @@ CLI 和 TUI 的所有操作记录到**同一个文件**：
 }
 ```
 
-字段含义：
+Field meanings:
 
-| 字段 | 说明 |
+| Field | Description |
 |------|------|
-| `ts` | ISO 8601 时间戳 |
-| `src` | 来源：`cli` 或 `tui` |
-| `action` | 动作：`mount` / `umount` / `create` / `remove` / `tui.start` / `tui.quit` |
-| `target` | 目标：卷名或描述 |
+| `ts` | ISO 8601 timestamp |
+| `src` | Source: `cli` or `tui` |
+| `action` | Action: `mount` / `umount` / `create` / `remove` / `tui.start` / `tui.quit` |
+| `target` | Target: vault name or description |
 | `result` | `started` / `success` / `failed` / `cancelled` |
-| `detail` | 附加信息（如命令行、错误细节） |
-| `pid` | 关联进程 PID（TUI 侧填写，CLI 侧为 null） |
-| `duration_ms` | 耗时（毫秒，TUI 侧填写，CLI 侧为 null） |
+| `detail` | Extra information (e.g. command line, error details) |
+| `pid` | Associated process PID (set by the TUI, null on the CLI side) |
+| `duration_ms` | Duration in milliseconds (set by the TUI, null on the CLI side) |
 
-### 日志轮转
+### Log rotation
 
-单文件超过 `settings.logging.max_size` 后：
+Once a single file exceeds `settings.logging.max_size`:
 
 ```
 app.log.jsonl  →  app.log.jsonl.1  →  app.log.jsonl.2  →  ...
 ```
 
-保留 `settings.logging.max_files` 个历史文件。
+`settings.logging.max_files` historical files are kept.
 
-### 旧历史迁移
+### Migrating old history
 
-早期版本使用 `history.jsonl`（字段名 `name` / `status`）。首次运行新版本时，TUI 会自动把旧文件内容迁移到 `app.log.jsonl` 并删除旧文件。字段映射：
+Earlier versions used `history.jsonl` (with the field names `name` / `status`). On its first run, the new version automatically migrates the old file's contents into `app.log.jsonl` and deletes the old file. Field mapping:
 
-| 旧 | 新 |
+| Old | New |
 |----|----|
 | `name` | `target` |
 | `status` | `result` |
-| （无） | `src: "cli"` |
+| (none) | `src: "cli"` |
 
-### 查询
+### Querying
 
-CLI 侧：
+CLI side:
 
 ```bash
-gocryptfs-cli log                        # 最近 20 条（人类可读，带颜色）
-gocryptfs-cli log --limit 100            # 最近 100 条
-gocryptfs-cli log --src tui              # 只看 TUI
-gocryptfs-cli log --action mount         # 只看挂载
-gocryptfs-cli log --result failed        # 只看失败
-gocryptfs-cli log --since 2026-09-29     # 按时间过滤
-gocryptfs-cli log --follow               # 实时跟踪
-gocryptfs-cli log --json                 # JSON 输出
+gocryptfs-cli log                        # last 20 entries (human-readable, colored)
+gocryptfs-cli log --limit 100            # last 100 entries
+gocryptfs-cli log --src tui              # TUI only
+gocryptfs-cli log --action mount         # mount only
+gocryptfs-cli log --result failed        # failures only
+gocryptfs-cli log --since 2026-09-29     # filter by time
+gocryptfs-cli log --follow               # follow in real time
+gocryptfs-cli log --json                 # JSON output
 ```
 
-TUI 侧：
+TUI side:
 
-- 按 `h` 打开历史浮层
-- 按 `s` / `r` / `a` 切换来源 / 结果 / 操作过滤
-- 按 `j` / `k` 移动选中
+- Press `h` to open the history overlay
+- Press `s` / `r` / `a` to switch the source / result / action filter
+- Press `j` / `k` to move the selection
 
 ---
 
-## 架构
+## Architecture
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│                   用户                                │
+│                         User                         │
 └────────────┬─────────────────────┬───────────────────┘
              │ TUI                 │ CLI
              ▼                     ▼
@@ -757,18 +759,18 @@ TUI 侧：
         └──────────┘         └──────────┘        └──────────┘
 ```
 
-### 目录结构
+### Directory structure
 
 ```
 gocryptfs-tui/
 ├── Cargo.toml
-├── build.rs                 # 编译期版本注入
+├── build.rs                 # compile-time version injection
 ├── Makefile
-├── release.toml             # cargo-release 配置
-├── cliff.toml               # git-cliff 配置
-├── Cross.toml               # cross 交叉编译配置
-├── dist-workspace.toml      # cargo-dist 配置
-├── RELEASING.md             # 发版流程文档
+├── release.toml             # cargo-release configuration
+├── cliff.toml               # git-cliff configuration
+├── Cross.toml               # cross cross-compilation configuration
+├── dist-workspace.toml      # cargo-dist configuration
+├── RELEASING.md             # release process documentation
 ├── README.md
 ├── CHANGELOG.md
 ├── LICENSE
@@ -777,137 +779,137 @@ gocryptfs-tui/
 │   └── workflows/
 │       └── release.yml      # cargo-dist CI workflow
 ├── src/
-│   ├── main.rs              # TUI 主入口 + 渲染
-│   ├── cli.rs               # 命令行参数解析（含 --lang）
-│   ├── logger.rs            # 日志模块
-│   ├── i18n.rs              # i18n API（语言解析、t!/tn! 宏、键表测试）
-│   ├── i18n_render_tests.rs # 渲染层多语言测试（仅测试构建）
+│   ├── main.rs              # TUI entry point + rendering
+│   ├── cli.rs               # command-line argument parsing (including --lang)
+│   ├── logger.rs            # logging module
+│   ├── i18n.rs              # i18n API (language resolution, t!/tn! macros, key-table tests)
+│   ├── i18n_render_tests.rs # render-layer i18n tests (test builds only)
 │   └── i18n/
-│       ├── zh_cn.rs         # 简体中文翻译表
-│       └── en_us.rs         # English 翻译表
+│       ├── zh_cn.rs         # Simplified Chinese translation table
+│       └── en_us.rs         # English translation table
 ├── shell/
-│   ├── gocryptfs-cli        # CLI 主入口（含 -l/--lang）
+│   ├── gocryptfs-cli        # CLI entry point (including -l/--lang)
 │   └── lib/
-│       ├── gocryptfs-lib.sh # 全部库函数
-│       └── i18n.sh          # Shell 侧消息表与语言解析
+│       ├── gocryptfs-lib.sh # all library functions
+│       └── i18n.sh          # Shell-side message tables and language resolution
 ├── tools/
-│   └── i18n_check.py        # TUI + Shell 的 i18n 键表/调用点一致性校验
+│   └── i18n_check.py        # TUI + Shell i18n key-table/call-site consistency check
 ├── test/
 │   ├── create-test-env.sh
 │   ├── cleanup-test-env.sh
 │   ├── test-batch1.sh
 │   ├── test-batch2.sh
-│   ├── test-i18n.sh         # CLI 侧 i18n 验收测试
+│   ├── test-i18n.sh         # CLI-side i18n acceptance tests
 │   └── test-all.sh
 └── examples/
     └── config.yaml.example
 ```
 
-### CLI 与 TUI 的交互协议
+### CLI ↔ TUI interaction protocol
 
-CLI 通过 **stderr 协议行** 向 TUI 汇报进度和结果：
+The CLI reports progress and results to the TUI through **stderr protocol lines**:
 
-| 协议行 | 含义 |
+| Protocol line | Meaning |
 |--------|------|
-| `@@PROGRESS@@ <pct> <done> <total>` | 迁移进度 |
-| `@@CHECK@@ <key> <value>` | 检查点数据（如容量） |
-| `@@DONE@@ <message>` | 操作成功 |
-| `@@ERROR@@ <code> <message>` | 操作失败 |
+| `@@PROGRESS@@ <pct> <done> <total>` | Migration progress |
+| `@@CHECK@@ <key> <value>` | Checkpoint data (e.g. capacity) |
+| `@@DONE@@ <message>` | Operation succeeded |
+| `@@ERROR@@ <code> <message>` | Operation failed |
 
-TUI 捕获这些行，更新界面状态；普通 stdout/stderr 显示在输出区。
-
----
-
-## 安全设计
-
-本项目**不重复实现密码学**，所有加密由 `gocryptfs` 提供。项目的安全职责：
-
-### 密码处理
-
-- 密码通过 stdin 从 TUI 传给 CLI
-- CLI 内部用**临时文件**（权限 `600`）传给 gocryptfs
-- 挂载完成后**立即删除**临时文件
-- 密码**永不写入配置文件、日志或历史**
-
-### 配置文件
-
-- **不包含任何密码或密钥**
-- 只包含路径、权限模式、选项开关
-
-### 挂载点权限
-
-- 未挂载时 `chmod 555`（只读锁定）
-- 挂载时 `chmod 755`
-- 使用系统 `chmod` 命令（保留 setgid/setuid/sticky 特殊位）
-
-### 删除保护
-
-- 默认**不删除加密后端**
-- 只有在配置显式授权（`remove.direct_delete_cipher: true`）且用户输入 `DELETE` 后才删除
-- 无法在向导中"越权"启用删除后端
-
-### 日志隐私
-
-- 日志不记录密码
-- 日志不记录明文内容
-- 日志只记录操作元数据（卷名、路径、结果）
-
-详细安全说明见 [SECURITY.md](SECURITY.md)。
+The TUI captures these lines and updates the UI state; ordinary stdout/stderr is displayed in the output pane.
 
 ---
 
-## 开发
+## Security design
 
-### 编译
+This project **does not reimplement cryptography**; all encryption is provided by `gocryptfs`. The project's security responsibilities are:
+
+### Password handling
+
+- The password is passed from the TUI to the CLI via stdin
+- Inside the CLI it is passed to gocryptfs through a **temporary file** (mode `600`)
+- The temporary file is **deleted immediately** after mounting completes
+- Passwords are **never written to the config file, logs, or history**
+
+### Config file
+
+- **Contains no passwords or keys**
+- Contains only paths, permission modes, and option toggles
+
+### Mount point permissions
+
+- `chmod 555` while unmounted (read-only lock)
+- `chmod 755` while mounted
+- Uses the system `chmod` command (preserving setgid/setuid/sticky special bits)
+
+### Deletion protection
+
+- By default the **cipher backend is not deleted**
+- It is deleted only when the config explicitly authorizes it (`remove.direct_delete_cipher: true`) and the user types `DELETE`
+- The wizard cannot be used to "escalate" into enabling backend deletion
+
+### Log privacy
+
+- Logs never record passwords
+- Logs never record plaintext contents
+- Logs record only operation metadata (vault name, path, result)
+
+For the detailed security notes, see [SECURITY.md](SECURITY.md).
+
+---
+
+## Development
+
+### Building
 
 ```bash
-# 本机 release 编译
+# Native release build
 make build
 
-# 调试版
+# Debug build
 make build-debug
 
-# 交叉编译（需要 cross）
+# Cross-compilation (requires cross)
 make build-arm64
 make build-musl
 make build-arm64-musl
 make build-all
 ```
 
-### 检查与测试
+### Checks and tests
 
 ```bash
-# 全部检查：fmt + clippy + 单元测试
+# All checks: fmt + clippy + unit tests
 make check
 
-# 单独跑
-make fmt           # 格式化代码
-make lint          # clippy（-D warnings）
-make i18n-check    # i18n 键表/调用点校验
-make test          # Rust 单元测试（含多语言渲染测试）
-make test-i18n     # i18n 验收：TUI + Shell 的语言解析矩阵与文案
-make test-env      # 生成 shell 测试环境
-make test-cli      # 运行 shell 测试批次
-make test-env-clean  # 清理测试环境
+# Run individually
+make fmt           # format the code
+make lint          # clippy (-D warnings)
+make i18n-check    # i18n key-table/call-site validation
+make test          # Rust unit tests (including i18n render tests)
+make test-i18n     # i18n acceptance: TUI + Shell language-resolution matrix and text
+make test-env      # generate the shell test environment
+make test-cli      # run the shell test batches
+make test-env-clean  # clean up the test environment
 
-# 完整验证
+# Full verification
 make verify
 ```
 
-### 本地安装
+### Local installation
 
-`make install` / `make install-system` 是**模式 ③（源码 + cargo）**的便捷封装：
+`make install` / `make install-system` are convenience wrappers for **mode ③ (source + cargo)**:
 
 ```bash
-make install            # = ./install.sh --local --user    （~/.local）
-make install-system     # = ./install.sh --local --system  （/usr/local，按需 sudo）
+make install            # = ./install.sh --local --user    (~/.local)
+make install-system     # = ./install.sh --local --system  (/usr/local, sudo as needed)
 make uninstall          # = ./install.sh --uninstall --user
 make uninstall-system   # = ./install.sh --uninstall --system
 ```
 
-模式 ①（懒人）/ ②（clone）不需要 cargo，直接用安装脚本即可（见「安装」）。
+Modes ① (one-liner) / ② (clone) do not need cargo; just use the install script (see "Installation").
 
-### 全部 Make 目标
+### All Make targets
 
 ```bash
 make help
@@ -915,60 +917,60 @@ make help
 
 ---
 
-## 发布
+## Releasing
 
-本项目使用 `cargo-release` + `cargo-dist` 组合：
+This project uses `cargo-release` + `cargo-dist` together:
 
-- **cargo-release**：bump 版本、打 tag、push（**不再自动改写 CHANGELOG**）
-- **cargo-dist**：CI 多平台构建、生成 installer、创建 GitHub Release
+- **cargo-release**: bump the version, tag, push (**no longer rewrites the CHANGELOG automatically**)
+- **cargo-dist**: multi-platform CI builds, generates installers, creates the GitHub Release
 
-> CHANGELOG.md 只在显式执行 `make changelog`（或 `make release` 的显式步骤）时生成；
-> `make dry-run` / `cargo release --dry-run` 不会改动任何文件。
-> 需要写提交标题表达不了的说明时，在 `changelog.d/` 放片段（`make changelog` 自动合并，
-> `make changelog-check` 校验格式），详见 `changelog.d/README.md`。
+> CHANGELOG.md is generated only when you explicitly run `make changelog` (or the explicit step in `make release`);
+> `make dry-run` / `cargo release --dry-run` do not modify any file.
+> To document something a commit title cannot express, drop a fragment in `changelog.d/` (`make changelog` merges it automatically,
+> and `make changelog-check` validates the format); see `changelog.d/README.md` for details.
 
-### 前置工具
+### Prerequisite tools
 
 ```bash
 cargo install cargo-release --locked
 cargo install git-cliff --locked
 cargo install cargo-dist --locked
-cargo install cross --git https://github.com/cross-rs/cross    # 可选
+cargo install cross --git https://github.com/cross-rs/cross    # optional
 gh auth login
 ```
 
-### 发布步骤
+### Release steps
 
 ```bash
-# 1. 预览 CHANGELOG 差异（只写 .staging/，不动 CHANGELOG.md）
+# 1. Preview the CHANGELOG diff (writes only to .staging/, leaves CHANGELOG.md untouched)
 make changelog-preview
 
-# 2. 前置检查（除 CHANGELOG.md 外工作区需干净）
+# 2. Pre-flight checks (the working tree must be clean except for CHANGELOG.md)
 make release-check
 
-# 3. 预览 cargo-release 动作（只读，不改文件）
+# 3. Preview the cargo-release actions (read-only, changes no files)
 make dry-run
 
-# 4. 一步发布：生成 CHANGELOG → 提交 → cargo release（bump + tag + push）
+# 4. One-step release: generate CHANGELOG → commit → cargo release (bump + tag + push)
 make release
 
-# 或指定级别
+# Or specify a level
 make release LEVEL=minor
 make release LEVEL=major
 
-# 5. 查看 CI 进度
+# 5. Watch CI progress
 gh run watch
 
-# 6. 验证 Release
+# 6. Verify the Release
 gh release view v0.2.0 --web
 ```
 
-push tag 后 GitHub Actions 自动触发 `.github/workflows/release.yml`，构建 4 个平台（gnu/musl × amd64/arm64）并创建 Release。
+After the tag is pushed, GitHub Actions automatically triggers `.github/workflows/release.yml`, builds 4 platforms (gnu/musl × amd64/arm64), and creates the Release.
 
-详细流程见 [RELEASING.md](RELEASING.md)。
+For the detailed process, see [RELEASING.md](RELEASING.md).
 
 ---
 
-## 许可
+## License
 
-MIT License，见 [LICENSE](LICENSE)。
+MIT License, see [LICENSE](LICENSE).

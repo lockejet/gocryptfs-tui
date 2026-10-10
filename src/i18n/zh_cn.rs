@@ -27,7 +27,7 @@ pub static ENTRIES: &[(&str, &str)] = &[
     ("clihelp.env_cli", "    GOCRYPTFS_CLI          CLI 可执行文件路径 [当前: {}]"),
     ("clihelp.env_editor", "    EDITOR                 配置编辑器 [当前: {}]"),
     ("clihelp.environment", "ENVIRONMENT:"),
-    ("clihelp.more_info", "更多信息见 README.md"),
+    ("clihelp.more_info", "更多信息见 README.zh-CN.md"),
     ("clihelp.opt_check_deps", "        --check-deps       检查运行时依赖并给出安装命令"),
     ("clihelp.opt_config", "    -c, --config <PATH>    配置文件路径"),
     ("clihelp.opt_data_dir", "    -D, --data-dir <DIR>   数据目录（日志、历史、帮助）"),
