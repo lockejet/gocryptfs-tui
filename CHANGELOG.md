@@ -2,7 +2,7 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/)。
 
-## [Unreleased]
+## [0.5.3] - 2026-10-10
 
 ### Documentation
 - README 改为**英文默认**：`README.md` 为英文版，中文版移至 `README.zh-CN.md`；
