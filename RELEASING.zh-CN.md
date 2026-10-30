@@ -42,6 +42,7 @@ cargo release --version
 git-cliff --version
 dist --version          # 注意：不是 cargo dist
 gh --version
+```
 
 ---
 
