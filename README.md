@@ -770,11 +770,14 @@ gocryptfs-tui/
 ├── cliff.toml               # git-cliff configuration
 ├── Cross.toml               # cross cross-compilation configuration
 ├── dist-workspace.toml      # cargo-dist configuration
-├── RELEASING.md             # release process documentation
-├── README.md
+├── README.md                # this file (English)
+├── README.zh-CN.md          # Chinese README
+├── RELEASING.md             # release process (English)
+├── RELEASING.zh-CN.md       # release process (Chinese)
+├── SECURITY.md              # security policy (English)
+├── SECURITY.zh-CN.md        # security policy (Chinese)
 ├── CHANGELOG.md
 ├── LICENSE
-├── SECURITY.md
 ├── .github/
 │   └── workflows/
 │       └── release.yml      # cargo-dist CI workflow

@@ -1,159 +1,165 @@
-# 发版流程
+# Releasing
 
-本文档描述 gocryptfs-tui 从开发到发布 GitHub Release 的完整流程。
+English | [中文](RELEASING.zh-CN.md)
 
-## 目录
 
-- [工具链](#工具链)
-- [一次性初始化](#一次性初始化)
-- [日常开发](#日常开发)
-- [发布新版本](#发布新版本)
-- [CI 自动构建](#ci-自动构建)
-- [验证 Release](#验证-release)
-- [回滚](#回滚)
-- [故障排查](#故障排查)
+This document describes the complete gocryptfs-tui workflow from development to publishing a GitHub Release.
+
+## Table of Contents
+
+- [Toolchain](#toolchain)
+- [One-time setup](#one-time-setup)
+- [Day-to-day development](#day-to-day-development)
+- [Publishing a new release](#publishing-a-new-release)
+- [CI automated builds](#ci-automated-builds)
+- [Verifying the Release](#verifying-the-release)
+- [Rollback](#rollback)
+- [Troubleshooting](#troubleshooting)
 
 ---
 
-## 工具链
+## Toolchain
 
-### 必需
+### Required
 
-| 工具 | 用途 | 安装 |
-|------|------|------|
-| `cargo-release` | bump 版本、打 tag、push | `cargo install cargo-release --locked` |
-| `git-cliff` | 从 git log 生成 CHANGELOG | `cargo install git-cliff --locked` |
-| `cargo-dist` | 多平台打包、创建 GitHub Release | `cargo install cargo-dist --locked` |
-| `gh` | GitHub CLI，用于查看/操作 Release | `sudo apt install gh` 或 https://cli.github.com/ |
+| Tool | Purpose | Installation |
+|------|---------|--------------|
+| `cargo-release` | bump the version, tag, push | `cargo install cargo-release --locked` |
+| `git-cliff` | generate CHANGELOG from the git log | `cargo install git-cliff --locked` |
+| `cargo-dist` | multi-platform packaging, create the GitHub Release | `cargo install cargo-dist --locked` |
+| `gh` | GitHub CLI, for viewing/operating Releases | `sudo apt install gh` or https://cli.github.com/ |
 
-### 可选
+### Optional
 
-| 工具 | 用途 | 安装 |
-|------|------|------|
-| `cross` | 本地交叉编译（arm64 / musl） | `cargo install cross --git https://github.com/cross-rs/cross` |
+| Tool | Purpose | Installation |
+|------|---------|--------------|
+| `cross` | local cross-compilation (arm64 / musl) | `cargo install cross --git https://github.com/cross-rs/cross` |
 
-### 版本检查
+### Version check
 
 ```bash
 cargo release --version
 git-cliff --version
-dist --version          # 注意：不是 cargo dist
+dist --version          # Note: not cargo dist
 gh --version
 
 ---
 
-## CHANGELOG 与发布流程
+## CHANGELOG and the release process
 
-**CHANGELOG.md 不会被自动改写。** `Cargo.toml` 中没有配置 `pre-release-hook`，
-因此 `make dry-run` / `cargo release --dry-run` 不会产生任何文件写入。
+**CHANGELOG.md is never rewritten automatically.** No `pre-release-hook` is configured in
+`Cargo.toml`, so `make dry-run` / `cargo release --dry-run` performs no file writes at all.
 
-| 命令 | 行为 |
-|------|------|
-| `make changelog-preview` | 只生成预览到 `.staging/CHANGELOG.preview.md`（`.staging/` 已 gitignore），**不动** `CHANGELOG.md` |
-| `make changelog` | **显式重写** `CHANGELOG.md`：git-cliff 生成 + 合并 `changelog.d/` 片段（片段保留）；默认 `[Unreleased]` 段，`make changelog TAG=v0.2.0` 生成指定版本段并归档片段 |
-| `make dry-run` | 只读预览 cargo-release 动作，不改动任何文件 |
-| `make release` | `check` → `release-check` → `changelog` → 提交 `CHANGELOG.md` → `cargo release --execute` |
+| Command | Behavior |
+|---------|----------|
+| `make changelog-preview` | writes a preview only to `.staging/CHANGELOG.preview.md` (`.staging/` is gitignored); **does not touch** `CHANGELOG.md` |
+| `make changelog` | **explicitly rewrites** `CHANGELOG.md`: git-cliff generation + merging of `changelog.d/` fragments (fragments are kept); the `[Unreleased]` section by default, or `make changelog TAG=v0.2.0` to generate the given version's section and archive the fragments |
+| `make dry-run` | read-only preview of the cargo-release actions; changes no files |
+| `make release` | `check` → `release-check` → `changelog` → commit `CHANGELOG.md` → `cargo release --execute` |
 
-### 发布步骤
+### Release steps
 
 ```bash
-# 1. 确认代码与测试
+# 1. Verify the code and tests
 make check
 
-# 2. 先看 CHANGELOG 会变成什么（可选但推荐）
+# 2. First see what CHANGELOG will become (optional but recommended)
 make changelog-preview
 git diff --no-index -- CHANGELOG.md .staging/CHANGELOG.preview.md
 
-# 3. 前置检查（除 CHANGELOG.md 外工作区必须干净）
+# 3. Pre-flight checks (the working tree must be clean except for CHANGELOG.md)
 make release-check
 
-# 4. 预览 cargo-release（只读）
+# 4. Preview cargo-release (read-only)
 make dry-run
 
-# 5. 一步发布（生成并提交 CHANGELOG，然后 bump + tag + push）
+# 5. Release in one step (generate and commit the CHANGELOG, then bump + tag + push)
 make release LEVEL=patch
 
-# 6. 查看 CI 与 Release
+# 6. Watch CI and the Release
 gh run watch
 gh release view v0.1.3 --web
 ```
 
-### 只想更新 CHANGELOG、不发布
+### Updating only the CHANGELOG, without releasing
 
 ```bash
 make changelog
 git add CHANGELOG.md
-git commit -m "docs: 更新 CHANGELOG"
+git commit -m "docs: update CHANGELOG"
 ```
 
-> 之所以去掉 `pre-release-hook`：cargo-release 的 hook 会在此前的 `--dry-run`
-> 中一并执行，导致"预览"也会重写 `CHANGELOG.md`（冲掉手工维护的 Unreleased 段落）。
+> Why the `pre-release-hook` was dropped: a cargo-release hook also runs during the earlier
+> `--dry-run`, so a "preview" would rewrite `CHANGELOG.md` as well (wiping out the
+> hand-maintained Unreleased section).
 
-### 手写内容：changelog.d/ 片段
+### Hand-written content: changelog.d/ fragments
 
-提交标题表达不了的内容（长篇说明、升级注意）写成片段文件，随代码一起提交：
+Content that a commit subject cannot express (long explanations, upgrade notes) goes into a
+fragment file, committed together with the code:
 
 ```bash
-# 新增片段
+# Add a fragment
 cat > changelog.d/2026-10-03-my-change.md <<'EOF'
 ### Features
-- 新增 xxx（详细说明……）
+- Add xxx (detailed explanation ...)
 EOF
 
-make changelog-check      # 校验片段语法
-make changelog-preview    # 预览合并结果（不动 CHANGELOG.md）
-make changelog            # 合并进 [Unreleased]（片段保留，可反复生成）
+make changelog-check      # validate fragment syntax
+make changelog-preview    # preview the merged result (does not touch CHANGELOG.md)
+make changelog            # merge into [Unreleased] (fragments are kept, so this can be re-run)
 ```
 
-- 组名用 `Features` / `Bug Fixes` / `Documentation` / `Build` 等，与 git-cliff 同名会自动合并。
-- 同一改动若已写片段，提交信息里加 `[skip changelog]`，避免 CHANGELOG 出现两条重复条目
-  （`cliff.toml` 已配置跳过）。
-- 发布时（`make release`）片段会并入新版本段并归档到 `changelog.d/archive/`。
-- 详情见 `changelog.d/README.md`。
+- Use group names such as `Features` / `Bug Fixes` / `Documentation` / `Build`; names matching git-cliff merge into the same group automatically.
+- If a change already has a fragment, add `[skip changelog]` to its commit message so the CHANGELOG
+  does not list it twice (`cliff.toml` is configured to skip it).
+- On release (`make release`) fragments are merged into the new version's section and archived to `changelog.d/archive/`.
+- See `changelog.d/README.md` for details.
 
 ---
 
-## 发布后检查（依赖与安装说明）
+## Post-release checks (dependencies and install instructions)
 
-cargo-dist 会用 **CHANGELOG 生成 GitHub Release 说明**，因此运行时依赖清单随
-`changelog.d/` 片段进入 Release 页面（shell 安装器本身不能提示系统依赖）。
+cargo-dist uses the **CHANGELOG to generate the GitHub Release notes**, so the runtime
+dependency list reaches the Release page through a `changelog.d/` fragment (the shell installer
+itself cannot prompt for system dependencies).
 
-发布后确认一次：
+Check once after releasing:
 
 ```bash
-gh release view v0.3.0 --json body --jq .body | grep -A 3 "运行时依赖"
+gh release view v0.3.0 --json body --jq .body | grep -A 3 "Runtime dependencies"
 ```
 
-若说明里缺依赖清单（例如片段没写），手工补一段：
+If the notes are missing the dependency list (for example because no fragment covered it), add one by hand:
 
 ```bash
 body="$(gh release view v0.3.0 --json body --jq .body)"
-printf '%s\n\n## 运行时依赖\n\n- gocryptfs / fusermount(fuse3) / rsync / yq(Go v4) / jq / mountpoint(util-linux)\n- 可选: tree\n- 检查: `gocryptfs-tui --check-deps`\n' "$body" \
+printf '%s\n\n## Runtime dependencies\n\n- gocryptfs / fusermount(fuse3) / rsync / yq(Go v4) / jq / mountpoint(util-linux)\n- Optional: tree\n- Check: `gocryptfs-tui --check-deps`\n' "$body" \
   | gh release edit v0.3.0 --notes-file -
 ```
 
-确认 Release 里**只有一个**安装脚本（`gocryptfs-tui-install.sh`；cargo-dist 的
-`-installer.sh` 已停用），并冒烟两条路径（都不需要源码/工具链）：
+Confirm the Release contains **exactly one** install script (`gocryptfs-tui-install.sh`;
+cargo-dist's `-installer.sh` is retired), and smoke-test both paths (neither needs source or a toolchain):
 
 ```bash
-gh release view v0.5.0 --json assets --jq '.assets[].name' | grep -E 'install\.sh|\.tar\.xz$' 
+gh release view v0.5.0 --json assets --jq '.assets[].name' | grep -E 'install\.sh|\.tar\.xz$'
 
-# 用户级
+# User-level
 curl -LsSf https://github.com/lockejet/gocryptfs-tui/releases/latest/download/gocryptfs-tui-install.sh \
   | sh -s -- --user --prefix /tmp/gocryptfs-tui-smoke
 /tmp/gocryptfs-tui-smoke/bin/gocryptfs-tui --version
 
-# 卸载（按清单）
+# Uninstall (from the manifest)
 curl -LsSf https://github.com/lockejet/gocryptfs-tui/releases/latest/download/gocryptfs-tui-install.sh \
   | sh -s -- --uninstall --prefix /tmp/gocryptfs-tui-smoke
 
-# 系统级（需 sudo；确认装到 /usr/local/bin 且链接 gocryptfs-cli）
+# System-level (requires sudo; confirm it installs to /usr/local/bin and links gocryptfs-cli)
 curl -LsSf .../gocryptfs-tui-install.sh | sh -s -- --system
 ```
 
-再确认一次安装脚本自身可用（POSIX sh、不需要 cargo）：
+Then check once more that the install script itself is usable (POSIX sh, no cargo needed):
 
 ```bash
 curl -LsSf https://github.com/lockejet/gocryptfs-tui/releases/latest/download/gocryptfs-tui-install.sh \
-  | sh -n /dev/stdin && echo "语法 OK"
+  | sh -n /dev/stdin && echo "syntax OK"
 ```

@@ -2,12 +2,21 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/)。
 
+## [Unreleased]
+
+### Documentation
+- `RELEASING.md`、`SECURITY.md` 改为**英文默认**：中文版移至 `RELEASING.zh-CN.md`、
+  `SECURITY.zh-CN.md`，两侧顶部都有 `English | 中文` 切换（与 README 一致）
+- `changelog.d/README.md` 改为**中英双语同文件**（英文在前、中文在后）；文件名保持不变，
+  因为片段工具按 `README.md` 名称跳过它
+- README（中英）的目录树与文档链接同步：中文版指向 `*.zh-CN.md`
+- 修正 SECURITY 文档里过时的日志路径（`/tmp/gocryptfs-tui.log` →
+  `$XDG_DATA_HOME/gocryptfs-tui/app.log.jsonl`）
+
 ## [0.5.3] - 2026-10-10
 
 ### Documentation
-- README 改为**英文默认**：`README.md` 为英文版，中文版移至 `README.zh-CN.md`；
-  两个文件顶部都有 `English | 中文` 语言切换链接（与主流开源项目一致）
-- 中文界面帮助里的「更多信息见 …」改指 `README.zh-CN.md`（英文界面仍指 `README.md`）
+- 更新 CHANGELOG
 
 ## [0.5.2] - 2026-10-04
 

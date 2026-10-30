@@ -1,82 +1,87 @@
-# 安全政策
+# Security Policy
 
-## 报告漏洞
+English | [中文](SECURITY.zh-CN.md)
 
-**请通过 GitHub Security Advisory 私密报告，不要开公开 Issue。**
 
-方式：
+## Reporting a Vulnerability
 
-1. 打开仓库首页
-2. 点击 **Security** 标签
-3. 点击 **Report a vulnerability**
-4. 填写漏洞详情
+**Please report through a private GitHub Security Advisory, not a public Issue.**
 
-我们会在 **n 天内**响应，**m 天内**发布修复版本。
+How:
 
-如果 GitHub Security Advisory 无法使用，也可以发邮件到：
+1. Open the repository home page
+2. Click the **Security** tab
+3. Click **Report a vulnerability**
+4. Fill in the vulnerability details
+
+We respond within **n days** and publish a fixed release within **m days**.
+
+If the GitHub Security Advisory cannot be used, you can also email:
 `<dopamineplz@outlook.com>`
 
-## 支持的版本
+## Supported Versions
 
-仅最新稳定版接受安全更新。旧版本请升级。
+Only the latest stable version receives security updates. Please upgrade older versions.
 
-## 已知安全设计
+## Known Security Design
 
-本项目不重复实现密码学，所有加密由 `gocryptfs` 提供。我们的安全职责仅限于：
+This project does not reimplement cryptography; all encryption is provided by `gocryptfs`. Our
+security responsibility is limited to:
 
-### 1. 密码处理
+### 1. Password Handling
 
-- 密码通过 **stdin 管道** 从 TUI 传给 CLI
-- CLI 内部用**临时文件**（权限 `600`）传给 `gocryptfs`
-- 挂载完成后**立即删除**临时文件
-- 密码**永不写入配置文件、日志或 history**
+- The password is passed from the TUI to the CLI through a **stdin pipe**
+- Inside the CLI it is handed to `gocryptfs` via a **temporary file** (mode `600`)
+- The temporary file is **deleted immediately** once the mount completes
+- The password is **never written to config files, logs, or history**
 
-### 2. 配置文件
+### 2. Config Files
 
-- 配置文件**不包含任何密码或密钥**
-- 只包含路径、权限模式、选项开关等元数据
+- Config files **contain no passwords or keys**
+- They hold metadata only: paths, permission modes, option switches
 
-### 3. 日志
+### 3. Logs
 
-- `/tmp/gocryptfs-tui.log` 只记录命令和路径，**不记录密码**
-- 日志中的路径可能暴露目录结构，请勿公开分享
+- `$XDG_DATA_HOME/gocryptfs-tui/app.log.jsonl` (default `~/.local/share/gocryptfs-tui/app.log.jsonl`)
+  records actions and paths only, **never passwords**
+- Paths in the log can expose your directory structure; do not share them publicly
 
-### 4. 挂载点权限
+### 4. Mount Point Permissions
 
-- 未挂载时自动 `chmod 555`（只读锁定）
-- 挂载时 `chmod 755`
-- 使用命令行 `chmod`（保留 setgid/setuid/sticky 特殊位）
-- 不修改挂载点属主
+- When unmounted, `chmod 555` is applied automatically (read-only lock)
+- When mounted, `chmod 755`
+- The command-line `chmod` is used (special setgid/setuid/sticky bits are preserved)
+- The mount point owner is never changed
 
-### 5. 删除加密的保护
+### 5. Protection When Deleting the Encryption
 
-- 删除加密默认**不删除加密后端**
-- 只有在配置显式授权（`remove.direct_delete_cipher: true`）且用户勾选后才会删除
-- 无法在向导中"越权"启用删除后端
+- Deleting the encryption **does not delete the encrypted backing store** by default
+- Deletion happens only when the config explicitly permits it (`remove.direct_delete_cipher: true`) and the user ticks the box
+- The wizard offers no way to "exceed its authority" and enable backing-store deletion
 
-### 6. 未挂载时的保护
+### 6. Protection When Unmounted
 
-- 挂载点必须存在（如用于 SMB 共享）
-- 未挂载时通过 `chmod 555` 阻止写入
-- 不依赖 `chattr`（会阻止 gocryptfs 挂载）
+- The mount point must exist (for example, for SMB sharing)
+- When unmounted, writes are blocked via `chmod 555`
+- No reliance on `chattr` (it would block gocryptfs mounts)
 
-## 不在威胁模型内
+## Out of Threat Model
 
-以下情况不在本项目的防护范围内：
+The following are outside this project's protection:
 
-- 攻击者已获得 root 权限
-- 攻击者已在系统上安装键盘记录器
-- 攻击者能物理访问未加密的内存
-- 用户自己的系统被完全攻陷
+- The attacker already has root privileges
+- The attacker has installed a keylogger on the system
+- The attacker can physically access unencrypted memory
+- The user's own system is fully compromised
 
-这些场景的安全由操作系统和物理安全提供。
+Security in these scenarios is provided by the operating system and physical security.
 
-## 依赖安全
+## Dependency Security
 
-本项目的安全性依赖于以下上游组件：
+The security of this project depends on these upstream components:
 
-- `gocryptfs` —— 提供加密
-- `fusermount` —— 提供挂载
-- `rsync` —— 提供文件迁移
+- `gocryptfs` — provides encryption
+- `fusermount` — provides mounting
+- `rsync` — provides file migration
 
-请保持这些工具的最新版本。
+Please keep these tools up to date.

@@ -771,11 +771,14 @@ gocryptfs-tui/
 ├── cliff.toml               # git-cliff 配置
 ├── Cross.toml               # cross 交叉编译配置
 ├── dist-workspace.toml      # cargo-dist 配置
-├── RELEASING.md             # 发版流程文档
-├── README.md
+├── README.md                # 英文 README（默认展示）
+├── README.zh-CN.md          # 本文件（中文）
+├── RELEASING.md             # 发版流程（英文）
+├── RELEASING.zh-CN.md       # 发版流程（中文）
+├── SECURITY.md              # 安全政策（英文）
+├── SECURITY.zh-CN.md        # 安全政策（中文）
 ├── CHANGELOG.md
 ├── LICENSE
-├── SECURITY.md
 ├── .github/
 │   └── workflows/
 │       └── release.yml      # cargo-dist CI workflow
@@ -855,7 +858,7 @@ TUI 捕获这些行，更新界面状态；普通 stdout/stderr 显示在输出�
 - 日志不记录明文内容
 - 日志只记录操作元数据（卷名、路径、结果）
 
-详细安全说明见 [SECURITY.md](SECURITY.md)。
+详细安全说明见 [SECURITY.zh-CN.md](SECURITY.zh-CN.md)。
 
 ---
 
@@ -968,7 +971,7 @@ gh release view v0.2.0 --web
 
 push tag 后 GitHub Actions 自动触发 `.github/workflows/release.yml`，构建 4 个平台（gnu/musl × amd64/arm64）并创建 Release。
 
-详细流程见 [RELEASING.md](RELEASING.md)。
+详细流程见 [RELEASING.zh-CN.md](RELEASING.zh-CN.md)。
 
 ---
 
