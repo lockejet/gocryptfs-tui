@@ -39,7 +39,7 @@ I18N_ZH=(
 
 全局选项:
   -c, --config FILE  配置文件路径（默认 $XDG_CONFIG_HOME/gocryptfs-tui/config.yaml）
-  -D, --data-dir DIR 数据目录（日志/历史，默认 $XDG_DATA_HOME/gocryptfs-tui）
+  -D, --data-dir DIR 数据目录（默认 $XDG_DATA_HOME/gocryptfs-tui；指定后日志/历史也放这里）
   -l, --lang CODE    界面语言: zh-CN | en-US
   -V, --version      显示版本
   --json             JSON 输出
@@ -178,7 +178,7 @@ Commands: list / info / ls / tree / mount / umount / create / remove
 
 Global options:
   -c, --config FILE  config file path (default $XDG_CONFIG_HOME/gocryptfs-tui/config.yaml)
-  -D, --data-dir DIR data directory (logs/history, default $XDG_DATA_HOME/gocryptfs-tui)
+  -D, --data-dir DIR data dir (default $XDG_DATA_HOME/gocryptfs-tui; logs/history follow it when set)
   -l, --lang CODE    UI language: zh-CN | en-US
   -V, --version      show version
   --json             JSON output

@@ -219,9 +219,10 @@ make uninstall-system                      # equivalent to --system
 make uninstall PREFIX=/opt/gocryptfs-tui   # custom prefix
 ```
 
-> Uninstalling does **not** delete config or data: config `${XDG_CONFIG_HOME:-~/.config}/gocryptfs-tui/`,
-> data `${XDG_DATA_HOME:-~/.local/share}/gocryptfs-tui/` (including logs, history, HELP.md,
-> and the unpacked embedded backend). Delete these two directories yourself for a full cleanup.
+> Uninstalling does **not** delete config, data or state: config `${XDG_CONFIG_HOME:-~/.config}/gocryptfs-tui/`,
+> data `${XDG_DATA_HOME:-~/.local/share}/gocryptfs-tui/` (HELP.md and the unpacked embedded backend),
+> state `${XDG_STATE_HOME:-~/.local/state}/gocryptfs-tui/` (logs, history and rotated files).
+> Delete these three directories yourself for a full cleanup.
 >
 > `install.sh --uninstall` reads `<prefix>/lib/gocryptfs-tui/INSTALLED.files` and deletes the entries one by one,
 > and only allows deleting paths inside the prefix; `make uninstall` deletes `$PREFIX/bin/gocryptfs-tui`,
@@ -393,14 +394,25 @@ ${XDG_CONFIG_HOME:-~/.config}/gocryptfs-tui/config.yaml
 
 Priority: `-c/--config` > `GOCRYPTFS_CONFIG` > `CONFIG_FILE` (legacy) > `XDG_CONFIG_HOME` > `~/.config`.
 
-The data directory (log `app.log.jsonl`, history `history.jsonl`, `HELP.md`, embedded backend) works the same way:
+The data directory (`HELP.md`, embedded backend) works the same way:
 
 ```
 ${XDG_DATA_HOME:-~/.local/share}/gocryptfs-tui/
 ```
 
 Priority: `-D/--data-dir` (supported by both the CLI and the TUI) > `GOCRYPTFS_DATA_DIR` >
-`LOG_FILE`/`HISTORY_FILE` (used by the TUI for child processes) > `XDG_DATA_HOME` > `~/.local/share`.
+`XDG_DATA_HOME` > `~/.local/share`.
+
+Runtime state (log `app.log.jsonl`, history `history.jsonl` and `.1`…`.N` rotated files)
+follows the XDG **state** directory (separate from config/data; `XDG_STATE_HOME` applies):
+
+```
+${XDG_STATE_HOME:-~/.local/state}/gocryptfs-tui/
+```
+
+Priority: `LOG_FILE`/`HISTORY_FILE` (used by the TUI for child processes) > `GOCRYPTFS_STATE_DIR` >
+an explicit `-D`/`GOCRYPTFS_DATA_DIR` (state then merges into the data directory, handy for isolated debugging) >
+`XDG_STATE_HOME` > `~/.local/state`.
 
 Use `-c` to specify another path:
 
@@ -656,10 +668,10 @@ The UI is divided into 4 focus panes (list / details / directory / output); cycl
 
 ### Unified log
 
-Every operation from the CLI and the TUI is recorded in **the same file**:
+Every operation from the CLI and the TUI is recorded in **the same file** (in the XDG state directory):
 
 ```
-~/.local/share/gocryptfs-tui/app.log.jsonl
+${XDG_STATE_HOME:-~/.local/state}/gocryptfs-tui/app.log.jsonl
 ```
 
 One JSON record per line:

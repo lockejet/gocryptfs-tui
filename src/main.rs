@@ -254,15 +254,16 @@ fn resolve_config(cli_opt: Option<PathBuf>) -> String {
         p.to_string_lossy().to_string()
     } else if let Some(p) = backend_config_path() {
         p
+    } else if let Some(cfg) = dirs::config_dir() {
+        // dirs::config_dir() 已遵循 $XDG_CONFIG_HOME，其次才是 ~/.config
+        cfg.join(APP_NAME)
+            .join("config.yaml")
+            .to_string_lossy()
+            .to_string()
     } else if let Some(home) = std::env::var_os("HOME") {
         PathBuf::from(home)
             .join(".config")
             .join(APP_NAME)
-            .join("config.yaml")
-            .to_string_lossy()
-            .to_string()
-    } else if let Some(cfg) = dirs::config_dir() {
-        cfg.join(APP_NAME)
             .join("config.yaml")
             .to_string_lossy()
             .to_string()
@@ -300,6 +301,60 @@ fn resolve_data_dir(cli_opt: Option<PathBuf>) -> PathBuf {
         PathBuf::from("/tmp").join(APP_NAME)
     };
     PathBuf::from(absolute_path(&raw.to_string_lossy()))
+}
+
+/// 运行期状态目录（日志/历史）。
+///
+/// 默认遵循 XDG：`$XDG_STATE_HOME/gocryptfs-tui`（通常是 `~/.local/state/gocryptfs-tui`）。
+/// 显式指定数据目录（`-D` / `GOCRYPTFS_DATA_DIR`）时与数据目录合并——便于
+/// `-D /tmp/dbg` 这类隔离调试把所有运行期文件放在同一处，也保持旧行为不变。
+fn resolve_state_dir(data_dir: &Path, data_overridden: bool) -> PathBuf {
+    if let Some(p) = std::env::var_os("GOCRYPTFS_STATE_DIR") {
+        return PathBuf::from(absolute_path(&p.to_string_lossy()));
+    }
+    if data_overridden {
+        return data_dir.to_path_buf();
+    }
+    match dirs::state_dir() {
+        Some(d) => d.join(APP_NAME),
+        None => data_dir.to_path_buf(),
+    }
+}
+
+/// 旧布局（日志/历史在数据目录）→ 状态目录的一次性迁移；新路径优先，失败则保留旧文件。
+fn migrate_runtime_files(data_dir: &Path, state_dir: &Path) {
+    if data_dir == state_dir {
+        return;
+    }
+    for name in ["app.log.jsonl", "history.jsonl"] {
+        let src = data_dir.join(name);
+        let dst = state_dir.join(name);
+        if src.exists() && !dst.exists() {
+            move_into(&src, &dst);
+        }
+    }
+    // 轮转日志 app.log.jsonl.1 … .N
+    if let Ok(entries) = std::fs::read_dir(data_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.starts_with("app.log.jsonl.") {
+                continue;
+            }
+            let dst = state_dir.join(&name);
+            if !dst.exists() {
+                move_into(&entry.path(), &dst);
+            }
+        }
+    }
+}
+
+fn move_into(src: &Path, dst: &Path) {
+    if std::fs::rename(src, dst).is_ok() {
+        return;
+    }
+    if std::fs::copy(src, dst).is_ok() {
+        let _ = std::fs::remove_file(src);
+    }
 }
 
 fn load_vaults(config: &str) -> Result<Vec<Vault>, String> {
@@ -3896,17 +3951,19 @@ fn run_app<B: Backend>(
 fn print_paths_lines(
     config: &str,
     data_dir: &Path,
+    state_dir: &Path,
     log_file: &Path,
     history_file: &Path,
     help_file: &Path,
 ) -> Vec<String> {
-    const LABELS: [&str; 10] = [
+    const LABELS: [&str; 11] = [
         "paths.label_bin",
         "paths.label_version",
         "paths.label_backend",
         "paths.label_backend_dir",
         "paths.label_config",
         "paths.label_data",
+        "paths.label_state",
         "paths.label_log",
         "paths.label_history",
         "paths.label_help",
@@ -3942,6 +3999,7 @@ fn print_paths_lines(
         row("paths.label_backend_dir", backend_dir.display().to_string()),
         row("paths.label_config", config.to_string()),
         row("paths.label_data", data_dir.display().to_string()),
+        row("paths.label_state", state_dir.display().to_string()),
         row("paths.label_log", log_file.display().to_string()),
         row("paths.label_history", history_file.display().to_string()),
         row("paths.label_help", help_file.display().to_string()),
@@ -3953,7 +4011,13 @@ fn print_paths_lines(
 
 // ---------- 打印帮助 ----------
 
-fn print_help(app_config: &str, data_dir: &Path, log_file: &Path, history_file: &Path) {
+fn print_help(
+    app_config: &str,
+    data_dir: &Path,
+    state_dir: &Path,
+    log_file: &Path,
+    history_file: &Path,
+) {
     // 显示"实际会用的后端"：GOCRYPTFS_CLI > 内嵌释放副本 > PATH 中的 gocryptfs-cli
     let cli_env = cli_path();
     let editor = std::env::var("EDITOR").unwrap_or_else(|_| "nano".to_string());
@@ -3984,6 +4048,7 @@ fn print_help(app_config: &str, data_dir: &Path, log_file: &Path, history_file: 
     println!("{}", t!("clihelp.paths"));
     println!("{}", t!("clihelp.path_config", app_config));
     println!("{}", t!("clihelp.path_data", data_dir.display()));
+    println!("{}", t!("clihelp.path_state", state_dir.display()));
     println!("{}", t!("clihelp.path_log", log_file.display()));
     println!("{}", t!("clihelp.path_history", history_file.display()));
     println!();
@@ -4015,6 +4080,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let outcome = cli::parse(std::env::args().collect());
 
     let data_dir = resolve_data_dir(outcome.opts.data_dir.clone());
+    // 运行期状态（日志/历史）默认跟随 XDG_STATE_HOME；显式 -D/GOCRYPTFS_DATA_DIR 时与之合并
+    let data_overridden =
+        outcome.opts.data_dir.is_some() || std::env::var_os("GOCRYPTFS_DATA_DIR").is_some();
+    let state_dir = resolve_state_dir(&data_dir, data_overridden);
 
     // 发行包不含 Shell 后端：运行 TUI 前先把内嵌副本释放到数据目录
     // （--help/--version 不写盘，只探测已释放的副本，保持只读）
@@ -4027,8 +4096,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let config = resolve_config(outcome.opts.config.clone());
-    let log_file = data_dir.join("app.log.jsonl");
-    let history_file = data_dir.join("history.jsonl");
+    let log_file = state_dir.join("app.log.jsonl");
+    let history_file = state_dir.join("history.jsonl");
     let help_file = data_dir.join("HELP.md");
 
     // 语言必须在任何用户可见输出之前确定
@@ -4044,7 +4113,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match outcome.action {
         cli::Action::Help => {
-            print_help(&config, &data_dir, &log_file, &history_file);
+            print_help(&config, &data_dir, &state_dir, &log_file, &history_file);
             return Ok(());
         }
         cli::Action::Version => {
@@ -4052,8 +4121,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             return Ok(());
         }
         cli::Action::PrintPaths => {
-            for line in print_paths_lines(&config, &data_dir, &log_file, &history_file, &help_file)
-            {
+            for line in print_paths_lines(
+                &config,
+                &data_dir,
+                &state_dir,
+                &log_file,
+                &history_file,
+                &help_file,
+            ) {
                 println!("{}", line);
             }
             return Ok(());
@@ -4078,7 +4153,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
 
-    migrate_old_history(&data_dir);
+    if state_dir != data_dir {
+        let _ = std::fs::create_dir_all(&state_dir);
+    }
+    migrate_runtime_files(&data_dir, &state_dir);
+    migrate_old_history(&state_dir);
 
     std::env::set_var("HISTORY_FILE", &history_file);
 

@@ -35,21 +35,57 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
 fi
 
 # § 1. 常量（XDG 优先；GOCRYPTFS_* / 旧变量兼容）
-# 显式传入的 LOG_FILE/HISTORY_FILE（例如 TUI 传给子进程）优先，其余跟随 DATA_DIR。
+# 显式传入的 LOG_FILE/HISTORY_FILE（例如 TUI 传给子进程）优先；
+# 其余跟随 STATE_DIR（运行期状态：日志/历史）。
 LOG_FILE_ENV="${LOG_FILE:-}"
 HISTORY_FILE_ENV="${HISTORY_FILE:-}"
 DATA_DIR="${GOCRYPTFS_DATA_DIR:-${DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/gocryptfs-tui}}"
 
-# 重新计算日志/历史路径。
+# 重新计算状态目录与日志/历史路径。
 # 必须在解析完 -D/--data-dir 之后再调用一次：lib 在 source 时还不知道参数。
+#   默认（遵循 XDG）：$XDG_STATE_HOME/gocryptfs-tui
+#   显式 -D / GOCRYPTFS_DATA_DIR：与数据目录合并（隔离调试时运行期文件同处）
+#   GOCRYPTFS_STATE_DIR 始终最高优先
 apply_data_dir() {
     DATA_DIR="${DATA_DIR:-${GOCRYPTFS_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/gocryptfs-tui}}"
-    LOG_FILE="${LOG_FILE_ENV:-$DATA_DIR/app.log.jsonl}"
-    HISTORY_FILE="${HISTORY_FILE_ENV:-$DATA_DIR/history.jsonl}"
-    export DATA_DIR LOG_FILE HISTORY_FILE
+    if [ -n "${GOCRYPTFS_STATE_DIR:-}" ]; then
+        STATE_DIR="$GOCRYPTFS_STATE_DIR"
+    elif [ -n "${DATA_DIR_EXPLICIT:-}" ] || [ -n "${GOCRYPTFS_DATA_DIR:-}" ]; then
+        STATE_DIR="$DATA_DIR"
+    else
+        STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/gocryptfs-tui"
+    fi
+    LOG_FILE="${LOG_FILE_ENV:-$STATE_DIR/app.log.jsonl}"
+    HISTORY_FILE="${HISTORY_FILE_ENV:-$STATE_DIR/history.jsonl}"
+    export DATA_DIR STATE_DIR LOG_FILE HISTORY_FILE
+
+    # 旧布局迁移（一次性、尽力而为）：日志/历史曾在数据目录 → 搬到状态目录；新路径优先
+    if [ "$STATE_DIR" != "$DATA_DIR" ]; then
+        _migrate_file() {
+            [ -f "$1" ] && [ ! -e "$2" ] || return 0
+            { mkdir -p "$STATE_DIR" 2>/dev/null || true; } 
+            { mv -f "$1" "$2" 2>/dev/null || cp -p "$1" "$2" 2>/dev/null && rm -f "$1" 2>/dev/null; } || true
+        }
+        _migrate_file "$DATA_DIR/app.log.jsonl" "$STATE_DIR/app.log.jsonl"
+        _migrate_file "$DATA_DIR/history.jsonl" "$STATE_DIR/history.jsonl"
+        for _rot in "$DATA_DIR"/app.log.jsonl.*; do
+            [ -e "$_rot" ] || continue
+            _migrate_file "$_rot" "$STATE_DIR/${_rot##*/}"
+        done
+        unset -f _migrate_file 2>/dev/null || true
+    fi
 }
 apply_data_dir
-LOCK_FILE="${LOCK_FILE:-/tmp/gocryptfs-tui.lock}"
+# 锁文件：优先 XDG_RUNTIME_DIR（0700，避免固定 /tmp 路径的 symlink 风险）
+if [ -z "${LOCK_FILE:-}" ]; then
+    if [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -d "${XDG_RUNTIME_DIR:-}" ]; then
+        LOCK_FILE="$XDG_RUNTIME_DIR/gocryptfs-tui.lock"
+    else
+        # 用 bash 内置 UID，避免受限 PATH（测试/极简环境）里 id 不可用
+        LOCK_FILE="/tmp/gocryptfs-tui.${UID:-0}.lock"
+    fi
+fi
+export LOCK_FILE
 EXIT_OK=0; EXIT_ERROR=1; EXIT_PASSWORD=2; EXIT_STATE=3
 EXIT_MOUNTPOINT=4; EXIT_NOSPACE=5; EXIT_UMOUNT=6
 EXIT_UMOUNT_FORCE=7; EXIT_CONFIG=8

@@ -1222,9 +1222,11 @@ fn print_paths_report_lists_effective_paths() {
     let cfg = "/tmp/print-paths-config.yaml";
     for lang in [i18n::Lang::ZhCn, i18n::Lang::EnUs] {
         i18n::set_lang(lang);
+        let state = dir.join("state");
         let lines = print_paths_lines(
             cfg,
             &dir,
+            &state,
             &dir.join("app.log.jsonl"),
             &dir.join("history.jsonl"),
             &dir.join("HELP.md"),
@@ -1243,6 +1245,7 @@ fn print_paths_report_lists_effective_paths() {
                 .to_string()
                 .as_str(),
             dir.join("HELP.md").to_string_lossy().to_string().as_str(),
+            state.to_string_lossy().to_string().as_str(),
             version_string().as_str(),
         ] {
             assert!(text.contains(expect), "{:?} 不在报告里:\n{text}", expect);
@@ -1361,4 +1364,52 @@ fn enter_key_no_longer_opens_wizards() {
         }
     }
     i18n::set_lang(i18n::Lang::ZhCn);
+}
+
+/// 旧布局（日志/历史在数据目录）→ 状态目录的一次性迁移。
+#[test]
+fn migrate_runtime_files_moves_logs_to_state_dir() {
+    let base = std::env::temp_dir().join(format!("gocryptfs-tui-migrate-{}", std::process::id()));
+    let data = base.join("data");
+    let state = base.join("state");
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::create_dir_all(&state).unwrap();
+    std::fs::write(data.join("app.log.jsonl"), "A\n").unwrap();
+    std::fs::write(data.join("app.log.jsonl.1"), "R1\n").unwrap();
+    std::fs::write(data.join("history.jsonl"), "H\n").unwrap();
+    std::fs::write(data.join("HELP.md"), "keep\n").unwrap();
+
+    migrate_runtime_files(&data, &state);
+
+    assert!(!data.join("app.log.jsonl").exists(), "日志应已迁移");
+    assert!(!data.join("history.jsonl").exists(), "历史应已迁移");
+    assert!(!data.join("app.log.jsonl.1").exists(), "轮转文件应已迁移");
+    assert_eq!(
+        std::fs::read_to_string(state.join("app.log.jsonl")).unwrap(),
+        "A\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(state.join("app.log.jsonl.1")).unwrap(),
+        "R1\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(state.join("history.jsonl")).unwrap(),
+        "H\n"
+    );
+    assert!(
+        data.join("HELP.md").exists(),
+        "HELP.md 属用户文档，应留在数据目录"
+    );
+
+    // 幂等：再调一次不应出错、也不覆盖已有文件
+    std::fs::write(state.join("app.log.jsonl"), "NEW\n").unwrap();
+    migrate_runtime_files(&data, &state);
+    assert_eq!(
+        std::fs::read_to_string(state.join("app.log.jsonl")).unwrap(),
+        "NEW\n"
+    );
+
+    // 状态目录与数据目录相同时是空操作
+    migrate_runtime_files(&state, &state);
+    let _ = std::fs::remove_dir_all(&base);
 }

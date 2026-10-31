@@ -181,9 +181,10 @@ if [ "$UNINSTALL" -eq 1 ]; then
     echo "  $BINDIR/gocryptfs-cli"
     echo "  $LIBDIR"
     echo ""
-    echo "[i] config and data directories were kept (remove them manually if needed):"
+    echo "[i] config/data/state directories were kept (remove them manually if needed):"
     echo "  ${XDG_CONFIG_HOME:-$HOME/.config}/gocryptfs-tui/"
     echo "  ${XDG_DATA_HOME:-$HOME/.local/share}/gocryptfs-tui/"
+    echo "  ${XDG_STATE_HOME:-$HOME/.local/state}/gocryptfs-tui/"
     remaining="$(command -v gocryptfs-cli 2>/dev/null || true)"
     if [ -n "$remaining" ]; then
         echo ""

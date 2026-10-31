@@ -63,6 +63,7 @@ while [ $i -le $# ]; do
                 exit 1
             fi
             DATA_DIR="${!i}"
+            DATA_DIR_EXPLICIT=1
             ;;
         --data-dir=*)
             _dataval="${arg#--data-dir=}"
@@ -71,6 +72,7 @@ while [ $i -le $# ]; do
                 exit 1
             fi
             DATA_DIR="$_dataval"
+            DATA_DIR_EXPLICIT=1
             ;;
         -V|--version)
             if [ -r "$VERSION_FILE" ]; then

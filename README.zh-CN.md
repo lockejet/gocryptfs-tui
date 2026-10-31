@@ -220,9 +220,10 @@ make uninstall-system                      # 等价 --system
 make uninstall PREFIX=/opt/gocryptfs-tui   # 指定前缀
 ```
 
-> 卸载**不删**配置与数据：配置 `${XDG_CONFIG_HOME:-~/.config}/gocryptfs-tui/`、
-> 数据 `${XDG_DATA_HOME:-~/.local/share}/gocryptfs-tui/`（含日志、历史、HELP.md、
-> 内嵌释放的后端）。需要彻底清理时自行删除这两个目录。
+> 卸载**不删**配置、数据与状态：配置 `${XDG_CONFIG_HOME:-~/.config}/gocryptfs-tui/`、
+> 数据 `${XDG_DATA_HOME:-~/.local/share}/gocryptfs-tui/`（含 HELP.md、内嵌释放的后端）、
+> 状态 `${XDG_STATE_HOME:-~/.local/state}/gocryptfs-tui/`（含日志、历史及轮转文件）。
+> 需要彻底清理时自行删除这三个目录。
 >
 > `install.sh --uninstall` 读 `<prefix>/lib/gocryptfs-tui/INSTALLED.files` 逐条删除，
 > 只允许删前缀内的路径；`make uninstall` 删除 `$PREFIX/bin/gocryptfs-tui`、
@@ -394,14 +395,25 @@ ${XDG_CONFIG_HOME:-~/.config}/gocryptfs-tui/config.yaml
 
 优先级：`-c/--config` > `GOCRYPTFS_CONFIG` > `CONFIG_FILE`（兼容）> `XDG_CONFIG_HOME` > `~/.config`。
 
-数据目录（日志 `app.log.jsonl`、历史 `history.jsonl`、`HELP.md`、内嵌后端）同理：
+数据目录（`HELP.md`、内嵌后端）同理：
 
 ```
 ${XDG_DATA_HOME:-~/.local/share}/gocryptfs-tui/
 ```
 
 优先级：`-D/--data-dir`（CLI 与 TUI 都支持）> `GOCRYPTFS_DATA_DIR` >
-`LOG_FILE`/`HISTORY_FILE`（TUI 给子进程用）> `XDG_DATA_HOME` > `~/.local/share`。
+`XDG_DATA_HOME` > `~/.local/share`。
+
+运行期状态（日志 `app.log.jsonl`、历史 `history.jsonl` 及 `.1`…`.N` 轮转文件）遵循
+XDG **状态**目录（与配置/数据分离，`XDG_STATE_HOME` 生效）：
+
+```
+${XDG_STATE_HOME:-~/.local/state}/gocryptfs-tui/
+```
+
+优先级：`LOG_FILE`/`HISTORY_FILE`（TUI 给子进程用）> `GOCRYPTFS_STATE_DIR` >
+显式 `-D`/`GOCRYPTFS_DATA_DIR`（此时与数据目录合并，便于隔离调试）>
+`XDG_STATE_HOME` > `~/.local/state`。
 
 可用 `-c` 指定其他路径：
 
@@ -657,10 +669,10 @@ gocryptfs-tui
 
 ### 统一日志
 
-CLI 和 TUI 的所有操作记录到**同一个文件**：
+CLI 和 TUI 的所有操作记录到**同一个文件**（位于 XDG 状态目录）：
 
 ```
-~/.local/share/gocryptfs-tui/app.log.jsonl
+${XDG_STATE_HOME:-~/.local/state}/gocryptfs-tui/app.log.jsonl
 ```
 
 每行一条 JSON 记录：

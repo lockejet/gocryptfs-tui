@@ -169,6 +169,21 @@ out="$(env LC_ALL=C bash "$CLI" -D /tmp/gocryptfs-tui-dtest log 2>&1 | head -1)"
 case "$out" in *"/tmp/gocryptfs-tui-dtest/app.log.jsonl"*) v=1 ;; *) v=0 ;; esac
 check "-D 决定日志路径" "1" "$v"
 
+# 19b. 默认把日志/历史放到 XDG_STATE_HOME（XDG 合规；-D 时才与数据目录合并）
+out="$(env -i HOME="$HOME" PATH="/usr/bin:/bin" XDG_STATE_HOME=/tmp/gocryptfs-tui-state LC_ALL=C bash "$CLI" log 2>&1 | head -1)"
+case "$out" in *"/tmp/gocryptfs-tui-state/gocryptfs-tui/app.log.jsonl"*) v=1 ;; *) v=0 ;; esac
+check "默认日志位置为 XDG_STATE_HOME" "1" "$v"
+
+# 19c. GOCRYPTFS_STATE_DIR 覆盖状态目录
+out="$(env -i HOME="$HOME" PATH="/usr/bin:/bin" GOCRYPTFS_STATE_DIR=/tmp/gocryptfs-tui-st2 LC_ALL=C bash "$CLI" log 2>&1 | head -1)"
+case "$out" in *"/tmp/gocryptfs-tui-st2/app.log.jsonl"*) v=1 ;; *) v=0 ;; esac
+check "GOCRYPTFS_STATE_DIR 生效" "1" "$v"
+
+# 19d. 锁文件优先 XDG_RUNTIME_DIR（0700，避免固定 /tmp 路径）
+mkdir -p /tmp/gocryptfs-tui-run
+out="$(env -i HOME="$HOME" PATH="/usr/bin:/bin" XDG_RUNTIME_DIR=/tmp/gocryptfs-tui-run LC_ALL=C bash -c "source \"$LIB\"; printf '%s' \"\$LOCK_FILE\"" 2>&1)"
+check "锁文件优先 XDG_RUNTIME_DIR" "/tmp/gocryptfs-tui-run/gocryptfs-tui.lock" "$out"
+
 # 20. XDG_CONFIG_HOME 生效（无 -c 时）
 out="$(env LC_ALL=C XDG_CONFIG_HOME=/tmp/gocryptfs-tui-xdg bash "$CLI" config 2>&1)"
 check "XDG_CONFIG_HOME 生效" "/tmp/gocryptfs-tui-xdg/gocryptfs-tui/config.yaml" "$out"
