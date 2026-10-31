@@ -2,7 +2,7 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/)。
 
-## [Unreleased]
+## [0.6.0] - 2026-10-31
 
 ### Documentation
 - `RELEASING.md`、`SECURITY.md` 改为**英文默认**：中文版移至 `RELEASING.zh-CN.md`、
