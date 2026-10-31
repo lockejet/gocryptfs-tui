@@ -152,8 +152,10 @@ def merge_groups(groups, extra):
     return [(name, index[name]) for name in names]
 
 
-def render_section(heading, groups):
+def render_section(heading, groups, note=''):
     parts = [f'{heading}\n']
+    if note.strip():
+        parts.append(note.strip() + '\n')
     for name, items in groups:
         parts.append(f'### {name}\n' + '\n'.join(items) + '\n')
     return '\n'.join(parts).rstrip('\n')
@@ -167,7 +169,7 @@ def render(preamble, sections):
     return '\n\n'.join(blocks) + '\n'
 
 
-def do_merge(generated, fragments_dir, merge_into='unreleased', tag=''):
+def do_merge(generated, fragments_dir, merge_into='unreleased', tag='', note=''):
     """返回 (合并后的文本, 已消费的片段路径列表)。
 
     merge_into:
@@ -195,15 +197,15 @@ def do_merge(generated, fragments_dir, merge_into='unreleased', tag=''):
             for i, sec in enumerate(sections):
                 heading, groups = parse_section(sec)
                 if ver in heading:
-                    sections[i] = render_section(heading, merge_groups(groups, extra))
+                    sections[i] = render_section(heading, merge_groups(groups, extra), note)
                     return render(preamble, sections), consumed
             if not extra:
                 return render(preamble, sections), consumed
             heading = f'## [{ver}] - {datetime.date.today().isoformat()}'
-            sections.insert(0, render_section(heading, merge_groups([], extra)))
+            sections.insert(0, render_section(heading, merge_groups([], extra), note))
             return render(preamble, sections), consumed
         heading, groups = parse_section(sections[0])
-        sections[0] = render_section(heading, merge_groups(groups, extra))
+        sections[0] = render_section(heading, merge_groups(groups, extra), note)
         return render(preamble, sections), consumed
 
     # unreleased：优先找现成的 [Unreleased] 段
@@ -255,7 +257,13 @@ def cmd_check(args):
 def cmd_merge(args):
     with open(args.generated, encoding='utf-8') as f:
         generated = f.read()
-    merged, consumed = do_merge(generated, args.fragments, args.merge_into, args.tag)
+    note = ''
+    if args.preamble:
+        with open(args.preamble, encoding='utf-8') as f:
+            note = f.read()
+    merged, consumed = do_merge(
+        generated, args.fragments, args.merge_into, args.tag, note
+    )
     if args.output == '-':
         sys.stdout.write(merged)
         return 0
@@ -291,6 +299,15 @@ def selftest():
         return f'合并逻辑错误: {merged}'
     if merge_groups(groups, [('Features', ['- 来自提交的条目'])]) != groups:
         return '重复条目未去重'
+    noted = render_section(
+        '## [0.9.9] - 2026-01-01',
+        [('Features', ['- x'])],
+        '**安装**\n\n```bash\ncurl x | sh\n```',
+    )
+    if not (
+        noted.index('## [0.9.9]') < noted.index('**安装**') < noted.index('### Features')
+    ):
+        return f'发布说明 preamble 位置错误:\n{noted}'
     text = render(preamble, [render_section(heading, merged), sections[1]])
     if '### Bug Fixes' not in text or '## [0.1.2]' not in text or '- 来自片段的条目' not in text:
         return f'渲染结果缺内容:\n{text}'
@@ -348,6 +365,11 @@ def main():
     m.add_argument('--merge-into', choices=['unreleased', 'first'], default='unreleased',
                    help='合并位置：unreleased=并入/新建 [Unreleased] 段（默认）；first=并入 tag 对应版本段（发布用）')
     m.add_argument('--tag', default='', help='发布模式下的版本标签（如 v0.1.3）')
+    m.add_argument(
+        '--preamble',
+        default='',
+        help='发布模式下插入版本段开头的固定文本文件（如安装命令），仅 tag 模式生效',
+    )
     c = sub.add_parser('check', help='校验片段语法')
     c.add_argument('--fragments', default='changelog.d', help='片段目录')
     args = parser.parse_args()

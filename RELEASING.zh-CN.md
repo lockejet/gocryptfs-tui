@@ -82,6 +82,20 @@ gh run watch
 gh release view v0.1.3 --web
 ```
 
+### 无人值守发布（CI / 定时任务）
+
+`cargo release` 默认会问 `y/N`。非交互环境必须传 `CONFIRM=0`（相当于 `--no-confirm`）：
+
+```bash
+make release LEVEL=patch CONFIRM=0
+```
+
+### Release 说明里的安装命令
+
+每次发布的说明开头会自动带上安装命令：来源是 `tools/release-preamble.md`——tag 模式的
+CHANGELOG 合并会把它插到版本段开头，cargo-dist 再把该段作为 GitHub Release 正文。
+改这个文件即可调整安装说明；要换文件用 `RELEASE_PREAMBLE=<path>`。
+
 ### 只想更新 CHANGELOG、不发布
 
 ```bash

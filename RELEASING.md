@@ -82,6 +82,22 @@ gh run watch
 gh release view v0.1.3 --web
 ```
 
+### Unattended release (CI / cron)
+
+`cargo release` asks for a `y/N` confirmation by default. Non-interactive environments must
+pass `CONFIRM=0` (adds `--no-confirm`):
+
+```bash
+make release LEVEL=patch CONFIRM=0
+```
+
+### Install instructions in the release notes
+
+Every release's notes start with the install commands, taken from `tools/release-preamble.md`:
+tag-mode CHANGELOG merge inserts it at the top of the version section, and cargo-dist publishes
+that section as the GitHub Release body. Edit that file to change the instructions; to use a
+different file, pass `RELEASE_PREAMBLE=<path>`.
+
 ### Updating only the CHANGELOG, without releasing
 
 ```bash

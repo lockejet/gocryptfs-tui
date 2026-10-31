@@ -24,6 +24,8 @@ PKG_NAME      := $(BIN)-$(PKG_VERSION)
 REPO    ?= $(shell git remote get-url origin 2>/dev/null | \
              sed -E 's|^[^:]+://[^/]+/||; s|^git@[^:]+:||; s|\.git$$||')
 LEVEL   ?= patch         # cargo release 的升级级别: patch / minor / major
+CONFIRM ?= 1             # 0 = 无人值守发布（cargo release --no-confirm）
+RELEASE_PREAMBLE ?= tools/release-preamble.md  # 发布说明开头插入的固定文本（安装命令）
 
 # ---------- 安装路径（install-local 用）----------
 PREFIX  ?= $(HOME)/.local
@@ -168,6 +170,7 @@ changelog: _changelog-gen  ## 显式生成 CHANGELOG.md（重写文件；片段�
 	python3 tools/changelog_fragments.py merge \
 		--generated $(CHANGELOG_STAGE) --fragments $(CHANGELOG_DIR) \
 		--merge-into $(if $(TAG),first,unreleased) --tag "$(TAG)" \
+		$(if $(TAG),--preamble $(RELEASE_PREAMBLE),) \
 		$(if $(ARCHIVE_FRAGMENTS),--archive $(CHANGELOG_DIR)/archive,) \
 		--output $(CHANGELOG)
 
@@ -213,7 +216,12 @@ release: check release-check  ## 生成并提交 CHANGELOG（含片段）后发�
 	else \
 		echo ">>> CHANGELOG 无变化，无需提交"; \
 	fi
-	cargo release $(LEVEL) --execute
+	@if [ "$(CONFIRM)" = "0" ]; then \
+		echo ">>> 无人值守发布（cargo release --no-confirm）"; \
+		cargo release $(LEVEL) --execute --no-confirm; \
+	else \
+		cargo release $(LEVEL) --execute; \
+	fi
 
 .PHONY: release-check
 release-check:  ## 检查发布前置条件（除 CHANGELOG.md 外工作区干净、gh 已登录）
@@ -349,6 +357,8 @@ help:  ## 显示本帮助
 	@echo ""
 	@echo "  发布参数:"
 	@echo "    LEVEL=patch|minor|major   默认 patch"
+	@echo "    CONFIRM=0                 无人值守（跳过 cargo-release 的 y/N 确认）"
+	@echo "    RELEASE_PREAMBLE=FILE     发布说明开头插入的固定文本（默认 tools/release-preamble.md）"
 	@echo "    例: make release LEVEL=minor"
 	@echo ""
 	@echo "安装:"
