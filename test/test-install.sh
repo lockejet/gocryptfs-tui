@@ -50,12 +50,15 @@ check "用户级安装: TUI 可执行" "yes" "$(exists "$P1/bin/gocryptfs-tui")"
 check "用户级安装: 独立后端存在" "yes" "$(exists "$P1/lib/gocryptfs-tui/gocryptfs-cli")"
 check "用户级安装: VERSION 存在" "yes" "$(exists "$P1/lib/gocryptfs-tui/VERSION")"
 check "用户级安装: 默认不链接 CLI" "no" "$(exists "$P1/bin/gocryptfs-cli")"
+check "用户级安装: Web 二进制存在" "yes" "$(exists "$P1/bin/gocryptfs-web")"
 check "安装清单存在" "yes" "$(exists "$P1/lib/gocryptfs-tui/INSTALLED.json")"
 check "文件清单存在" "yes" "$(exists "$P1/lib/gocryptfs-tui/INSTALLED.files")"
 check "清单含 TUI 路径" "yes" \
     "$(grep -qx "$P1/bin/gocryptfs-tui" "$P1/lib/gocryptfs-tui/INSTALLED.files" && echo yes || echo no)"
 check "清单 source 为 local" "yes" \
     "$(grep -q '"source": "local:' "$P1/lib/gocryptfs-tui/INSTALLED.json" && echo yes || echo no)"
+check "清单含 Web 路径" "yes" \
+    "$(grep -qx "$P1/bin/gocryptfs-web" "$P1/lib/gocryptfs-tui/INSTALLED.files" && echo yes || echo no)"
 
 # ---- 2. 系统级语义：--system 会链接 CLI（用 --prefix 覆盖落点以便在沙箱测试）----
 P2="$TMP/system"
@@ -71,12 +74,19 @@ P3="$TMP/nolink"
 sh "$INSTALL" --system --prefix "$P3" --no-link-cli --no-build --no-deps-check >/dev/null 2>&1
 check "--no-link-cli 覆盖 --system" "no" "$(exists "$P3/bin/gocryptfs-cli")"
 
+# --no-web：只装 TUI
+P5="$TMP/noweb"
+sh "$INSTALL" --prefix "$P5" --no-build --no-web --no-deps-check >/dev/null 2>&1
+check "--no-web: TUI 已安装" "yes" "$(exists "$P5/bin/gocryptfs-tui")"
+check "--no-web: 未安装 Web" "no" "$(exists "$P5/bin/gocryptfs-web")"
+
 # ---- 3. 卸载：按清单删除，不动无关文件 ----
 echo keep > "$P1/bin/unrelated-tool"
 echo keep > "$P1/lib/unrelated-file"
 sh "$INSTALL" --uninstall --prefix "$P1" >/dev/null 2>&1
 check "卸载: TUI 已删除" "no" "$(exists "$P1/bin/gocryptfs-tui")"
 check "卸载: 后端目录已删除" "no" "$(exists "$P1/lib/gocryptfs-tui")"
+check "卸载: Web 已删除" "no" "$(exists "$P1/bin/gocryptfs-web")"
 check "卸载: 无关文件保留 (bin)" "yes" "$(exists "$P1/bin/unrelated-tool")"
 check "卸载: 无关文件保留 (lib)" "yes" "$(exists "$P1/lib/unrelated-file")"
 
@@ -102,7 +112,7 @@ check "管道执行: TUI 已安装" "yes" "$(exists "$P4/bin/gocryptfs-tui")"
 check "管道执行: 清单已写" "yes" "$(exists "$P4/lib/gocryptfs-tui/INSTALLED.json")"
 # 管道执行时不应把 $0（=sh）当成脚本路径来提示
 out="$(cat "$INSTALL" | sh -s -- --prefix "$P4" --no-build --no-deps-check 2>&1 | tail -3)"
-case "$out" in *"gocryptfs-tui-install.sh"*) v=1 ;; *) v=0 ;; esac
+case "$out" in *"gocryptfs-ui-install.sh"*) v=1 ;; *) v=0 ;; esac
 check "管道执行: 卸载提示给出 URL 形式" "1" "$v"
 
 # ---- 5. 默认落点与 --user（用假 HOME，避免动真实 ~/.local）----

@@ -4,7 +4,7 @@
 # 两种来源：
 #   * 本地源码：在仓库里执行 ./install.sh（需要 cargo）
 #   * 官方 Release：./install.sh --from-release（不需要源码/工具链），
-#     也可直接 `curl -LsSf <release>/gocryptfs-tui-install.sh | sh -s -- ...`
+#     也可直接 `curl -LsSf <release>/gocryptfs-ui-install.sh | sh -s -- ...`
 #
 # 模式默认自动判断：curl|sh（无源码树）→ Release；仓库内执行 → 本地源码。
 # 完整用法见 `./install.sh --help`（仅此一处，避免文档与实现漂移）。
@@ -19,6 +19,8 @@ LINK_CLI="${LINK_CLI:-0}"
 LINK_CLI_SET=0
 FROM_RELEASE=0
 MODE=""          # 空 = 自动；local / release
+INSTALL_WEB=1    # 是否一并安装 gocryptfs-web（--no-web 关闭）
+RELEASE_BASE=""  # 覆盖 Release 下载根（镜像/离线测试）
 RELEASE_VER=""
 DEPS_CHECK=1
 
@@ -27,7 +29,7 @@ usage() {
 install.sh — install / uninstall gocryptfs-tui (TUI binary + shell backend)
 
 Usage (one script, three modes):
-  lazy    curl -LsSf <release>/gocryptfs-tui-install.sh | sh -s -- [--user|--system]
+  lazy    curl -LsSf <release>/gocryptfs-ui-install.sh | sh -s -- [--user|--system]
   clone   git clone … && ./install.sh --from-release [--user|--system]
   source  git clone … && make build && ./install.sh --local [--user|--system]
 
@@ -45,9 +47,11 @@ Mode and uninstall:
   ./install.sh --link-cli              symlink gocryptfs-cli into <prefix>/bin
   ./install.sh --no-link-cli           never link, even with --system
   ./install.sh --no-deps-check         skip the post-install dependency check
+  ./install.sh --no-web                install only the TUI (skip gocryptfs-web)
+  ./install.sh --release-base URL      use a mirror/test directory for Release assets
 
   # no source/toolchain needed (GitHub Release asset):
-  curl -LsSf https://github.com/lockejet/gocryptfs-ui/releases/latest/download/gocryptfs-tui-install.sh \
+  curl -LsSf https://github.com/lockejet/gocryptfs-ui/releases/latest/download/gocryptfs-ui-install.sh \
     | sh -s -- --system
 
 The mode is auto-detected: `curl … | sh` (no source tree) installs from the Release;
@@ -76,6 +80,9 @@ while [ $# -gt 0 ]; do
         --link-cli)      LINK_CLI=1; LINK_CLI_SET=1 ;;
         --no-link-cli)   LINK_CLI=0; LINK_CLI_SET=1 ;;
         --no-deps-check) DEPS_CHECK=0 ;;
+        --no-web)        INSTALL_WEB=0 ;;
+        --release-base)  RELEASE_BASE="${2:?--release-base needs a URL}"; shift ;;
+        --release-base=*) RELEASE_BASE="${1#--release-base=}" ;;
         -h|--help)       usage; exit 0 ;;
         *) echo "[!] unknown argument: $1" >&2; usage >&2; exit 2 ;;
     esac
@@ -172,7 +179,7 @@ if [ "$UNINSTALL" -eq 1 ]; then
         echo "    (no install manifest found; using default paths)"
     fi
     # 无论有无清单都清理已知路径，并删除空的 lib 目录
-    priv rm -f "$BINDIR/gocryptfs-cli" "$BINDIR/gocryptfs-tui"
+    priv rm -f "$BINDIR/gocryptfs-cli" "$BINDIR/gocryptfs-tui" "$BINDIR/gocryptfs-web"
     priv rm -rf "$LIBDIR"
     # 只在确认为空时才删父目录（非空会失败，不影响其它文件）
     priv rmdir "$PREFIX/lib" >/dev/null 2>&1 || true
@@ -248,28 +255,44 @@ if [ "$FROM_RELEASE" -eq 1 ]; then
     esac
     if have ldd && ldd --version 2>&1 | grep -qi musl; then libc="musl"; else libc="gnu"; fi
     target="${arch}-unknown-linux-${libc}"
-    asset="gocryptfs-tui-${target}.tar.xz"
+    # 0.7.0 起资产前缀是 gocryptfs-ui-*；旧版本（≤0.6.x）仍是 gocryptfs-tui-*
+    asset_new="gocryptfs-ui-${target}.tar.xz"
+    asset_old="gocryptfs-tui-${target}.tar.xz"
+    asset=""
 
     # 未指定版本：在 git checkout 里优先用当前 tag（保证与该份源码对应），否则用 latest
     if [ -z "$RELEASE_VER" ] && have git && git rev-parse --git-dir >/dev/null 2>&1; then
         RELEASE_VER="$(git describe --tags --abbrev=0 2>/dev/null || true)"
     fi
-    if [ -n "$RELEASE_VER" ]; then
+    if [ -n "$RELEASE_BASE" ]; then
+        base="$RELEASE_BASE"
+        ver_label="${RELEASE_VER:-mirror}"
+    elif [ -n "$RELEASE_VER" ]; then
         base="https://github.com/$REPO/releases/download/$RELEASE_VER"
         ver_label="$RELEASE_VER"
     else
         base="https://github.com/$REPO/releases/latest/download"
+        ver_label="latest"
+    fi
+
+    echo "==> source: Release ($ver_label, $target)"
+    # 先试新资产名，失败再回退旧名（兼容 0.6.x 及更早的 Release）
+    for _a in "$asset_new" "$asset_old"; do
+        if download "$base/$_a" "$DL/$_a"; then
+            asset="$_a"
+            break
+        fi
+    done
+    if [ -z "$asset" ]; then
+        echo "[!] download failed: $base/$asset_new (also tried $asset_old)" >&2
+        echo "    download manually: https://github.com/$REPO/releases" >&2
+        exit 1
+    fi
+    if [ -z "$RELEASE_BASE" ] && [ -z "$RELEASE_VER" ]; then
         # 解析 latest 实际指向的 tag（失败则退回 "latest"）
         ver_label="$(curl -fsSIL -o /dev/null -w '%{url_effective}' "$base/$asset" 2>/dev/null \
             | sed -n 's#.*/releases/download/\([^/]*\)/.*#\1#p' | head -1)"
         [ -n "$ver_label" ] || ver_label="latest"
-    fi
-
-    echo "==> source: Release ($ver_label, $target)"
-    if ! download "$base/$asset" "$DL/$asset"; then
-        echo "[!] download failed: $base/$asset" >&2
-        echo "    download manually: https://github.com/$REPO/releases" >&2
-        exit 1
     fi
     if download "$base/$asset.sha256" "$DL/$asset.sha256" 2>/dev/null; then
         ( cd "$DL" && sha256sum -c "$asset.sha256" >/dev/null ) \
@@ -280,6 +303,8 @@ if [ "$FROM_RELEASE" -eq 1 ]; then
     fi
     tar -xJf "$DL/$asset" -C "$DL"
     BIN_SRC="$DL/${asset%.tar.xz}/gocryptfs-tui"
+    WEB_SRC="$DL/${asset%.tar.xz}/gocryptfs-web"
+    [ -f "$WEB_SRC" ] || WEB_SRC=""
     [ -f "$BIN_SRC" ] || { echo "[!] archive does not contain gocryptfs-tui" >&2; exit 1; }
 
     # 独立后端：从同一 Release 的源码包取 shell/
@@ -302,7 +327,7 @@ else
         if ! have cargo; then
             echo "[!] local mode needs the Rust toolchain, but cargo was not found." >&2
             echo "    without source/toolchain, install from the Release:" >&2
-            echo "      curl -LsSf https://github.com/$REPO/releases/latest/download/gocryptfs-tui-install.sh \\" >&2
+            echo "      curl -LsSf https://github.com/$REPO/releases/latest/download/gocryptfs-ui-install.sh \\" >&2
             echo "        | sh -s -- --from-release --system" >&2
             exit 1
         fi
@@ -312,6 +337,8 @@ else
         echo "==> skipping build (--no-build)"
     fi
     BIN_SRC="target/release/gocryptfs-tui"
+    WEB_SRC="target/release/gocryptfs-web"
+    [ -f "$WEB_SRC" ] || WEB_SRC=""
     SHELL_DIR="shell"
     SOURCE_DESC="local:$BIN_SRC"
     echo "==> source: local build ($BIN_SRC)"
@@ -348,6 +375,14 @@ fi
 priv cp -f "$BIN_SRC" "$BINDIR/gocryptfs-tui"
 priv chmod 0755 "$BINDIR/gocryptfs-tui" "$LIBDIR/gocryptfs-cli" 2>/dev/null || true
 record "$BINDIR/gocryptfs-tui"
+    
+    if [ "$INSTALL_WEB" = "1" ] && [ -n "$WEB_SRC" ]; then
+        priv cp -f "$WEB_SRC" "$BINDIR/gocryptfs-web"
+        priv chmod 0755 "$BINDIR/gocryptfs-web"
+        record "$BINDIR/gocryptfs-web"
+    elif [ "$INSTALL_WEB" = "1" ]; then
+        echo "[i] gocryptfs-web is not in this archive (older release); installing the TUI only"
+    fi
 
 printf '%s\n' "$BIN_VERSION" > "$STAGE/VERSION"
 priv cp -f "$STAGE/VERSION" "$LIBDIR/VERSION"
@@ -363,7 +398,7 @@ fi
 # ---- 写安装清单（供 --uninstall 精确删除）----
 {
     printf '{\n'
-    printf '  "app": "gocryptfs-tui",\n'
+    printf '  "app": "gocryptfs-ui",\n'
     printf '  "version": "%s",\n' "$(json_escape "$BIN_VERSION")"
     printf '  "prefix": "%s",\n' "$(json_escape "$PREFIX")"
     printf '  "source": "%s",\n' "$(json_escape "$SOURCE_DESC")"
@@ -437,6 +472,9 @@ if [ "$LINK_CLI" = "1" ] && [ -n "$SHELL_DIR" ]; then
     echo "  CLI:  $BINDIR/gocryptfs-cli -> $LIBDIR/gocryptfs-cli"
 elif [ -n "$SHELL_DIR" ]; then
     echo "  CLI:  $LIBDIR/gocryptfs-cli (not linked into PATH; add --link-cli to link)"
+    if [ -f "$BINDIR/gocryptfs-web" ]; then
+        echo "  Web:  $BINDIR/gocryptfs-web (see 'gocryptfs-web --help')"
+    fi
 else
     echo "  CLI:  (embedded backend only; extracted to the data dir on first run)"
 fi
@@ -449,6 +487,6 @@ echo "Run:  gocryptfs-tui"
 if [ -f "$0" ] && [ -r "$0" ]; then
     echo "Uninstall: $0 --uninstall --prefix $PREFIX"
 else
-    echo "Uninstall: curl -LsSf https://github.com/$REPO/releases/latest/download/gocryptfs-tui-install.sh \\"
+    echo "Uninstall: curl -LsSf https://github.com/$REPO/releases/latest/download/gocryptfs-ui-install.sh \\"
     echo "             | sh -s -- --uninstall --prefix $PREFIX"
 fi
