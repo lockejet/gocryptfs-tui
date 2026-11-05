@@ -50,7 +50,8 @@ fn main() {
     println!("cargo:rustc-env=APP_BUILD_TIME={}", build_time);
 
     // 触发重编译
-    println!("cargo:rerun-if-changed=.git/HEAD");
+    // 相对核心 crate 的包根：../../.git/HEAD 才是仓库的 HEAD
+    println!("cargo:rerun-if-changed=../../.git/HEAD");
     println!("cargo:rerun-if-env-changed=BUILD_VERSION");
     println!("cargo:rerun-if-env-changed=GIT_COMMIT");
     println!("cargo:rerun-if-env-changed=BUILD_TIME");
