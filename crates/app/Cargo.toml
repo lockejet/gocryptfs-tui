@@ -1,0 +1,20 @@
+[package]
+name = "gocryptfs-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "gocryptfs 加密卷管理：CLI (sh) + TUI + Web UI"
+# 这里是 cargo-dist 的"app"包：一个包产出两个二进制，保证一次发布只生成一个 Release
+
+[[bin]]
+name = "gocryptfs-tui"
+path = "src/bin/gocryptfs-tui.rs"
+
+[[bin]]
+name = "gocryptfs-web"
+path = "src/bin/gocryptfs-web.rs"
+
+[dependencies]
+gocryptfs-ui-tui = { path = "../tui" }
+gocryptfs-ui-web = { path = "../web" }

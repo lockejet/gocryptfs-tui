@@ -5,9 +5,5 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
-[[bin]]
-name = "gocryptfs-web"
-path = "src/main.rs"
-
 [dependencies]
 gocryptfs-ui-core = { path = "../core" }

@@ -219,7 +219,7 @@ def main():
         if n_zh != n_en:
             errors.append(f'{key}: zh 有 {n_zh} 个占位符，en 有 {n_en} 个')
 
-    for path in ('crates/tui/src/main.rs', 'crates/tui/src/cli.rs'):
+    for path in ('crates/tui/src/lib.rs', 'crates/tui/src/cli.rs'):
         full = os.path.join(root, path)
         src = open(full, encoding='utf-8').read()
         for line, macro, key, args in extract_calls(src):

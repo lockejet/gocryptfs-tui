@@ -1,4 +1,5 @@
 // Web UI 入口（开发中）。当前仅提供占位的 --help / --version。
+// 由 `gocryptfs-web` 二进制调用。
 use gocryptfs_ui_core::{version_string, PROJECT_NAME};
 
 fn usage() {
@@ -7,7 +8,7 @@ fn usage() {
     println!("Part of the {PROJECT_NAME} project.");
 }
 
-fn main() {
+pub fn run() {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
     if args.iter().any(|a| a == "-h" || a == "--help") {

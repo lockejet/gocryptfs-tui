@@ -3682,7 +3682,8 @@ fn print_version() {
 
 // ---------- 主入口 ----------
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// TUI 入口（由 `gocryptfs-tui` 二进制调用）。
+pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let outcome = cli::parse(std::env::args().collect());
 
     let data_dir = paths::resolve_data_dir(outcome.opts.data_dir.clone());

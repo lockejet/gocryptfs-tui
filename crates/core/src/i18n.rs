@@ -669,7 +669,7 @@ mod tests {
         }
 
         let sources = [
-            ("main.rs", include_str!("../../tui/src/main.rs")),
+            ("main.rs", include_str!("../../tui/src/lib.rs")),
             ("cli.rs", include_str!("../../tui/src/cli.rs")),
         ];
         let mut missing: Vec<String> = Vec::new();
@@ -695,7 +695,7 @@ mod tests {
     #[test]
     fn no_hardcoded_cjk_outside_catalogs() {
         let sources = [
-            ("main.rs", include_str!("../../tui/src/main.rs")),
+            ("main.rs", include_str!("../../tui/src/lib.rs")),
             ("cli.rs", include_str!("../../tui/src/cli.rs")),
         ];
         let mut bad: Vec<String> = Vec::new();

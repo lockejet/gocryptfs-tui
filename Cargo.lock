@@ -214,6 +214,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "gocryptfs-ui"
+version = "0.6.1"
+dependencies = [
+ "gocryptfs-ui-tui",
+ "gocryptfs-ui-web",
+]
+
+[[package]]
 name = "gocryptfs-ui-core"
 version = "0.6.1"
 dependencies = [
