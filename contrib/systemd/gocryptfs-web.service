@@ -10,8 +10,8 @@
 # 首次启动会生成 token 并打印到 journal：
 #   journalctl --user -u gocryptfs-web -n 20
 #
-# 默认只监听 127.0.0.1:8787；远程访问请用反向代理（TLS 由代理终结），
-# 例如 caddy: `reverse_proxy 127.0.0.1:8787`。
+# 默认只监听 127.0.0.1:30032；远程访问请用反向代理（TLS 由代理终结），
+# 例如 caddy: `reverse_proxy 127.0.0.1:30032`（对外 44332 → 本机 30032）。
 
 [Unit]
 Description=gocryptfs-web — browser UI for gocryptfs vaults
@@ -21,7 +21,7 @@ After=network.target
 [Service]
 Type=simple
 # 必须以「拥有这些加密卷的普通用户」运行（不要用 root）
-ExecStart=%h/.local/bin/gocryptfs-web --listen 127.0.0.1:8787
+ExecStart=%h/.local/bin/gocryptfs-web --listen 127.0.0.1:30032
 Restart=on-failure
 RestartSec=2
 

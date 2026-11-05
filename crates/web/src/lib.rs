@@ -42,7 +42,8 @@ mod tests;
 const SESSION_TTL: Duration = Duration::from_secs(12 * 60 * 60);
 const SESSION_COOKIE: &str = "gfs_session";
 const CSRF_HEADER: &str = "x-gfs-csrf";
-const DEFAULT_LISTEN: &str = "127.0.0.1:8787";
+// 端口约定：gocryptfs-ui 用 30032（反代 44332 → 本机 30032）
+const DEFAULT_LISTEN: &str = "127.0.0.1:30032";
 
 // ============================================================
 // 内嵌前端
@@ -66,7 +67,7 @@ pub struct AppState {
     pub users: Arc<Mutex<auth::AuthStore>>,
     /// `web.auth` 路径（CLI 与 HTTP 共用）。
     pub auth_path: PathBuf,
-    /// 对外可访问的基址，例如 `http://127.0.0.1:8787`。
+    /// 对外可访问的基址，例如 `http://127.0.0.1:30032`。
     pub listen_url: String,
     /// 一次性登录 nonce → 签发时间。
     pub nonces: Arc<Mutex<HashMap<String, Instant>>>,
