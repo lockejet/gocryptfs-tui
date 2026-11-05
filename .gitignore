@@ -54,3 +54,7 @@ config.yaml.backup
 # ===== Python =====
 __pycache__/
 *.pyc
+
+# Web UI：依赖与构建缓存不入库（web/dist 产物是刻意提交的，便于 CI 无需 Node）
+node_modules/
+web/.vite/
