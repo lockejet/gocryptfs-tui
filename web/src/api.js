@@ -21,7 +21,11 @@ async function readError(res) {
     try {
       const body = JSON.parse(text);
       if (body && typeof body === 'object') {
-        return body.error || body.message || text;
+        if (typeof body.error === 'string') return body.error;
+        if (body.error && typeof body.error === 'object') {
+          return body.error.code || body.error.message || text;
+        }
+        return body.message || text;
       }
     } catch (_) {
       /* not JSON */
@@ -35,8 +39,6 @@ async function request(path, { method = 'GET', body } = {}) {
   const headers = {};
   if (method !== 'GET') {
     headers['x-gfs-csrf'] = '1';
-  }
-  if (body !== undefined) {
     headers['content-type'] = 'application/json';
   }
 
@@ -68,14 +70,83 @@ async function json(res) {
   }
 }
 
+// --- auth status -----------------------------------------------------------
+
+const AUTH_FALLBACK = { token_auth: true, password_auth: false, '2fa_available': false };
+
+// GET /api/auth/status is public. Any failure degrades to token-only auth so
+// the login screen always renders.
+export async function authStatus() {
+  try {
+    const res = await fetch('/api/auth/status', {
+      method: 'GET',
+      credentials: 'same-origin',
+      headers: { accept: 'application/json' }
+    });
+    if (!res.ok) return { ...AUTH_FALLBACK };
+    const data = (await res.json()) || {};
+    return {
+      token_auth: typeof data.token_auth === 'boolean' ? data.token_auth : true,
+      password_auth: data.password_auth === true,
+      '2fa_available':
+        data['2fa_available'] === true || data['twofa_available'] === true
+    };
+  } catch (_) {
+    return { ...AUTH_FALLBACK };
+  }
+}
+
 // --- session ---------------------------------------------------------------
 
-export async function login(token) {
+export async function loginWithToken(token) {
   await request('/api/session', { method: 'POST', body: { token } });
 }
 
+// QR / one-time link login: the nonce travels in the page URL fragment.
+export async function loginWithNonce(nonce) {
+  await request('/api/session', { method: 'POST', body: { nonce } });
+}
+
+export async function loginWithPassword(username, password, totp) {
+  const body = { username, password };
+  if (totp) body.totp = totp;
+  await request('/api/session', { method: 'POST', body });
+}
+
+// Backwards compatible alias.
+export const login = loginWithToken;
+
 export async function logout() {
   await request('/api/session', { method: 'DELETE' });
+}
+
+// --- one-time login links --------------------------------------------------
+
+export async function createLoginLink() {
+  const data = await json(await request('/api/login-links', { method: 'POST' }));
+  return data || {};
+}
+
+// --- two-factor auth -------------------------------------------------------
+
+export async function enroll2fa() {
+  return (await json(await request('/api/2fa/enroll', { method: 'POST' }))) || {};
+}
+
+export async function activate2fa(code) {
+  return (
+    (await json(await request('/api/2fa/activate', { method: 'POST', body: { code } }))) || {}
+  );
+}
+
+export async function disable2fa(code) {
+  await request('/api/2fa/disable', { method: 'POST', body: { code } });
+}
+
+export async function regenerateBackupCodes(code) {
+  return (
+    (await json(await request('/api/2fa/backup-codes', { method: 'POST', body: { code } }))) || {}
+  );
 }
 
 // --- vaults ----------------------------------------------------------------
