@@ -157,12 +157,12 @@ printf '%s\n\n## 运行时依赖\n\n- gocryptfs / fusermount(fuse3) / rsync / yq
 gh release view v0.5.0 --json assets --jq '.assets[].name' | grep -E 'install\.sh|\.tar\.xz$' 
 
 # 用户级
-curl -LsSf https://github.com/lockejet/gocryptfs-tui/releases/latest/download/gocryptfs-tui-install.sh \
+curl -LsSf https://github.com/lockejet/gocryptfs-ui/releases/latest/download/gocryptfs-tui-install.sh \
   | sh -s -- --user --prefix /tmp/gocryptfs-tui-smoke
 /tmp/gocryptfs-tui-smoke/bin/gocryptfs-tui --version
 
 # 卸载（按清单）
-curl -LsSf https://github.com/lockejet/gocryptfs-tui/releases/latest/download/gocryptfs-tui-install.sh \
+curl -LsSf https://github.com/lockejet/gocryptfs-ui/releases/latest/download/gocryptfs-tui-install.sh \
   | sh -s -- --uninstall --prefix /tmp/gocryptfs-tui-smoke
 
 # 系统级（需 sudo；确认装到 /usr/local/bin 且链接 gocryptfs-cli）
@@ -172,6 +172,6 @@ curl -LsSf .../gocryptfs-tui-install.sh | sh -s -- --system
 再确认一次安装脚本自身可用（POSIX sh、不需要 cargo）：
 
 ```bash
-curl -LsSf https://github.com/lockejet/gocryptfs-tui/releases/latest/download/gocryptfs-tui-install.sh \
+curl -LsSf https://github.com/lockejet/gocryptfs-ui/releases/latest/download/gocryptfs-tui-install.sh \
   | sh -n /dev/stdin && echo "语法 OK"
 ```

@@ -1,14 +1,17 @@
-# gocryptfs-tui
+# gocryptfs-ui
 
 [English](README.md) | 中文
 
+在 Linux 上管理 `gocryptfs` 加密卷 —— 命令行、终端界面、浏览器，三种用法。
 
-一个用于管理 `gocryptfs` 加密卷的 TUI + CLI 工具，运行于 Linux。
+| 组件 | 命令 | 状态 |
+|---|---|---|
+| **sh 后端** | `gocryptfs-cli` | Shell 实现，功能完整，脚本友好 |
+| **TUI** | `gocryptfs-tui` | 终端交互界面（当前主力前端） |
+| **Web UI** | `gocryptfs-web` | 浏览器界面（开发中） |
 
-- **CLI**（`gocryptfs-cli`）：Shell 后端，功能完整，脚本友好
-- **TUI**（`gocryptfs-tui`）：终端交互界面，日常操作直观
-
-TUI 通过调用 CLI 完成所有实际工作，因此两者行为完全一致，可分别独立使用。
+三个前端都是同一套 Shell 后端的薄客户端，因此行为完全一致、可分别独立使用；
+配置/数据/状态目录沿用历史命名 `gocryptfs-tui`（兼容）。
 
 ---
 
@@ -114,10 +117,10 @@ gocryptfs-cli --check-deps
 
 ```bash
 # 用户级 → ~/.local/bin（默认，无需 sudo）
-curl -LsSf https://github.com/lockejet/gocryptfs-tui/releases/latest/download/gocryptfs-tui-install.sh | sh
+curl -LsSf https://github.com/lockejet/gocryptfs-ui/releases/latest/download/gocryptfs-tui-install.sh | sh
 
 # 系统级 → /usr/local/bin（按需 sudo，并链接独立 CLI）
-curl -LsSf https://github.com/lockejet/gocryptfs-tui/releases/latest/download/gocryptfs-tui-install.sh \
+curl -LsSf https://github.com/lockejet/gocryptfs-ui/releases/latest/download/gocryptfs-tui-install.sh \
   | sh -s -- --system
 
 # 指定版本
@@ -128,14 +131,14 @@ curl -LsSf .../gocryptfs-tui-install.sh | sh -s -- --user --version v0.5.0
 `source.tar.gz` 取 `shell/` 作为独立后端（保证与 TUI 版本配套）→ 跑 `--check-deps`
 → 写安装清单（`INSTALLED.json` / `INSTALLED.files`）。
 
-> **离线 / 内网**：直接在 [Releases](https://github.com/lockejet/gocryptfs-tui/releases)
+> **离线 / 内网**：直接在 [Releases](https://github.com/lockejet/gocryptfs-ui/releases)
 > 下载 `gocryptfs-tui-<target>.tar.xz`，解压后把 `gocryptfs-tui` 放到 `~/.local/bin`
 > 即可（内嵌后端会在首次运行时释放到数据目录）。
 
 ### ② git clone 模式（不需要 cargo）
 
 ```bash
-git clone https://github.com/lockejet/gocryptfs-tui.git
+git clone https://github.com/lockejet/gocryptfs-ui.git
 cd gocryptfs-tui
 ./install.sh --from-release            # 默认取当前 checkout 的 tag；装到 ~/.local
 ./install.sh --from-release --system   # 装到 /usr/local
@@ -147,7 +150,7 @@ cd gocryptfs-tui
 ### ③ 手动模式（源码 + cargo）
 
 ```bash
-git clone https://github.com/lockejet/gocryptfs-tui.git
+git clone https://github.com/lockejet/gocryptfs-ui.git
 cd gocryptfs-tui
 make build                             # 或 cargo build --release
 ./install.sh --local                   # 装到 ~/.local

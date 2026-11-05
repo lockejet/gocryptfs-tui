@@ -2,9 +2,9 @@
 name = "gocryptfs-tui"
 version = "0.6.1"          # 真实版本从 git tag 读取（build.rs）
 edition = "2021"
-description = "gocryptfs 加密卷管理 TUI + CLI"
+description = "gocryptfs 加密卷管理：CLI (sh) + TUI + Web UI（Web 开发中）"
 license = "MIT"
-repository = "https://github.com/lockejet/gocryptfs-tui"
+repository = "https://github.com/lockejet/gocryptfs-ui"
 build = "build.rs"
 
 [dependencies]

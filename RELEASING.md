@@ -162,12 +162,12 @@ cargo-dist's `-installer.sh` is retired), and smoke-test both paths (neither nee
 gh release view v0.5.0 --json assets --jq '.assets[].name' | grep -E 'install\.sh|\.tar\.xz$'
 
 # User-level
-curl -LsSf https://github.com/lockejet/gocryptfs-tui/releases/latest/download/gocryptfs-tui-install.sh \
+curl -LsSf https://github.com/lockejet/gocryptfs-ui/releases/latest/download/gocryptfs-tui-install.sh \
   | sh -s -- --user --prefix /tmp/gocryptfs-tui-smoke
 /tmp/gocryptfs-tui-smoke/bin/gocryptfs-tui --version
 
 # Uninstall (from the manifest)
-curl -LsSf https://github.com/lockejet/gocryptfs-tui/releases/latest/download/gocryptfs-tui-install.sh \
+curl -LsSf https://github.com/lockejet/gocryptfs-ui/releases/latest/download/gocryptfs-tui-install.sh \
   | sh -s -- --uninstall --prefix /tmp/gocryptfs-tui-smoke
 
 # System-level (requires sudo; confirm it installs to /usr/local/bin and links gocryptfs-cli)
@@ -177,6 +177,6 @@ curl -LsSf .../gocryptfs-tui-install.sh | sh -s -- --system
 Then check once more that the install script itself is usable (POSIX sh, no cargo needed):
 
 ```bash
-curl -LsSf https://github.com/lockejet/gocryptfs-tui/releases/latest/download/gocryptfs-tui-install.sh \
+curl -LsSf https://github.com/lockejet/gocryptfs-ui/releases/latest/download/gocryptfs-tui-install.sh \
   | sh -n /dev/stdin && echo "syntax OK"
 ```

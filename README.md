@@ -1,13 +1,18 @@
-# gocryptfs-tui
+# gocryptfs-ui
 
 English | [中文](README.zh-CN.md)
 
-A TUI + CLI tool for managing `gocryptfs` encrypted vaults on Linux.
+Manage `gocryptfs` encrypted vaults on Linux — from the shell, a terminal UI, or the browser.
 
-- **CLI** (`gocryptfs-cli`): Shell backend, feature-complete, script-friendly
-- **TUI** (`gocryptfs-tui`): interactive terminal UI, intuitive for everyday operations
+| Component | Command | Status |
+|---|---|---|
+| **sh backend** | `gocryptfs-cli` | Shell implementation, feature-complete, script-friendly |
+| **TUI** | `gocryptfs-tui` | Interactive terminal UI — the primary frontend today |
+| **Web UI** | `gocryptfs-web` | Browser UI — in development |
 
-The TUI does all of its real work by invoking the CLI, so the two behave identically and can be used independently.
+All three frontends are thin clients over the same shell backend (`gocryptfs-cli`), so they behave
+identically and can be used independently. Config/data/state directories keep the historical
+`gocryptfs-tui` naming for compatibility.
 
 ---
 
@@ -113,10 +118,10 @@ only print the `export PATH=…` you need to run; config and data directories fo
 
 ```bash
 # User-level → ~/.local/bin (default, no sudo)
-curl -LsSf https://github.com/lockejet/gocryptfs-tui/releases/latest/download/gocryptfs-tui-install.sh | sh
+curl -LsSf https://github.com/lockejet/gocryptfs-ui/releases/latest/download/gocryptfs-tui-install.sh | sh
 
 # System-level → /usr/local/bin (sudo as needed, and links the standalone CLI)
-curl -LsSf https://github.com/lockejet/gocryptfs-tui/releases/latest/download/gocryptfs-tui-install.sh \
+curl -LsSf https://github.com/lockejet/gocryptfs-ui/releases/latest/download/gocryptfs-tui-install.sh \
   | sh -s -- --system
 
 # Pin a version
@@ -128,13 +133,13 @@ The script will: detect the architecture/libc → download the matching `tar.xz`
 `--check-deps` → write the install manifest (`INSTALLED.json` / `INSTALLED.files`).
 
 > **Offline / air-gapped**: just download `gocryptfs-tui-<target>.tar.xz` from
-> [Releases](https://github.com/lockejet/gocryptfs-tui/releases), extract it, and put `gocryptfs-tui` in
+> [Releases](https://github.com/lockejet/gocryptfs-ui/releases), extract it, and put `gocryptfs-tui` in
 > `~/.local/bin` (the embedded backend unpacks itself into the data directory on first run).
 
 ### ② git clone mode (no cargo required)
 
 ```bash
-git clone https://github.com/lockejet/gocryptfs-tui.git
+git clone https://github.com/lockejet/gocryptfs-ui.git
 cd gocryptfs-tui
 ./install.sh --from-release            # defaults to the current checkout's tag; installs to ~/.local
 ./install.sh --from-release --system   # installs to /usr/local
@@ -146,7 +151,7 @@ cd gocryptfs-tui
 ### ③ Source build mode (source + cargo)
 
 ```bash
-git clone https://github.com/lockejet/gocryptfs-tui.git
+git clone https://github.com/lockejet/gocryptfs-ui.git
 cd gocryptfs-tui
 make build                             # or cargo build --release
 ./install.sh --local                   # installs to ~/.local

@@ -10,7 +10,8 @@
 # 完整用法见 `./install.sh --help`（仅此一处，避免文档与实现漂移）。
 set -eu
 
-REPO="${GOCRYPTFS_TUI_REPO:-lockejet/gocryptfs-tui}"
+# 仓库 slug（改名后兼容旧环境变量名）
+REPO="${GOCRYPTFS_UI_REPO:-${GOCRYPTFS_TUI_REPO:-${GOCRYPTFS_REPO:-lockejet/gocryptfs-ui}}}"
 PREFIX="${PREFIX:-$HOME/.local}"
 DO_BUILD=1
 UNINSTALL=0
@@ -46,7 +47,7 @@ Mode and uninstall:
   ./install.sh --no-deps-check         skip the post-install dependency check
 
   # no source/toolchain needed (GitHub Release asset):
-  curl -LsSf https://github.com/lockejet/gocryptfs-tui/releases/latest/download/gocryptfs-tui-install.sh \
+  curl -LsSf https://github.com/lockejet/gocryptfs-ui/releases/latest/download/gocryptfs-tui-install.sh \
     | sh -s -- --system
 
 The mode is auto-detected: `curl … | sh` (no source tree) installs from the Release;

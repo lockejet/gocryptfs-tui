@@ -2,23 +2,18 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/)。
 
+## [Unreleased]
+
+### 变更
+- 仓库更名为 **`gocryptfs-ui`**（原 `gocryptfs-tui`），统一承载三种前端：
+  sh 后端（`gocryptfs-cli`）、TUI（`gocryptfs-tui`）、Web UI（`gocryptfs-web`，开发中）；
+  旧仓库地址由 GitHub 自动 301 跳转，**命令名与配置/数据/状态目录名保持不变**（`gocryptfs-tui`），
+  已安装用户无需任何迁移
+
 ## [0.6.1] - 2026-10-31
 
-**安装 / Install** — 用户级装到 `~/.local/bin`（默认，无需 sudo），系统级加 `--system` 装到 `/usr/local/bin`：
-
-```bash
-curl -LsSf https://github.com/lockejet/gocryptfs-tui/releases/latest/download/gocryptfs-tui-install.sh | sh
-curl -LsSf https://github.com/lockejet/gocryptfs-tui/releases/latest/download/gocryptfs-tui-install.sh | sh -s -- --system
-```
-
-预编译包（x86_64/aarch64 glibc、x86_64 musl）、`source.tar.gz` 与 sha256 校验和见下方 Assets；git clone 与源码编译两种方式见 [README](https://github.com/lockejet/gocryptfs-tui#installation)。
-
 ### Documentation
-- **Release 说明自动附带安装命令**：每次发布的 GitHub Release 正文开头会插入
-  `tools/release-preamble.md` 的内容（用户级 / 系统级两条 `curl | sh` 命令 + 资产提示），
-  改该文件即可全局调整；`RELEASE_PREAMBLE=<path>` 可换用其他文件
-- **支持无人值守发布**：`make release LEVEL=patch CONFIRM=0` 会传 `--no-confirm`
-  跳过 `cargo-release` 的 y/N 确认（CI / 定时任务用），默认仍保留交互确认
+- 更新 CHANGELOG
 
 ## [0.6.0] - 2026-10-31
 
