@@ -17,6 +17,11 @@ rust-embed = { version = "8", features = ["interpolate-folder-path", "mime-guess
 rand = "0.8"
 base64 = "0.22"
 chrono = "0.4"
+argon2 = "0.5"
+totp-rs = { version = "5", features = ["otpauth"] }
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+sha2 = "0.11"
+hex = "0.4"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

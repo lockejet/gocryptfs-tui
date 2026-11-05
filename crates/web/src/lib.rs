@@ -7,13 +7,14 @@
 //!   * 内嵌前端静态资源（SPA 回退）。
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write as _};
+use std::io::{BufRead, BufReader, IsTerminal, Write as _};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use axum::extract::connect_info::ConnectInfo;
 use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, Method, Request, StatusCode, Uri};
 use axum::middleware::{self, Next};
@@ -32,6 +33,8 @@ use tokio_stream::StreamExt;
 
 use gocryptfs_ui_core as core;
 use rust_embed::RustEmbed;
+
+mod auth;
 
 #[cfg(test)]
 mod tests;
@@ -57,8 +60,21 @@ struct Assets;
 /// Web 服务共享状态（测试可直接构造）。
 #[derive(Clone)]
 pub struct AppState {
-    pub token: String,
+    /// 多 token 存储（只含 sha256，不含明文）。
+    pub tokens: Arc<Mutex<auth::TokenStore>>,
+    /// 用户名 / 密码 / TOTP 存储。
+    pub users: Arc<Mutex<auth::AuthStore>>,
+    /// `web.auth` 路径（CLI 与 HTTP 共用）。
+    pub auth_path: PathBuf,
+    /// 对外可访问的基址，例如 `http://127.0.0.1:8787`。
+    pub listen_url: String,
+    /// 一次性登录 nonce → 签发时间。
+    pub nonces: Arc<Mutex<HashMap<String, Instant>>>,
+    /// 进程内登录限流器。
+    pub rate_limiter: Arc<Mutex<auth::RateLimiter>>,
     pub sessions: Arc<Mutex<HashMap<String, Instant>>>,
+    /// 密码登录时记录 session 对应的用户名（token 登录为 None）。
+    pub session_users: Arc<Mutex<HashMap<String, String>>>,
     pub config: String,
     pub data_dir: PathBuf,
     pub data_overridden: bool,
@@ -76,10 +92,34 @@ impl AppState {
         data_overridden: bool,
         state_dir: PathBuf,
     ) -> Self {
+        Self::with_token_store(
+            auth::TokenStore::with_token(&token),
+            config,
+            data_dir,
+            data_overridden,
+            state_dir,
+        )
+    }
+
+    /// 用已有的 token store 构造（服务启动时从 JSON 文件加载）。
+    pub fn with_token_store(
+        store: auth::TokenStore,
+        config: String,
+        data_dir: PathBuf,
+        data_overridden: bool,
+        state_dir: PathBuf,
+    ) -> Self {
         let log_path = state_dir.join("app.log.jsonl");
+        let auth_path = state_dir.join("web.auth");
         Self {
-            token,
+            tokens: Arc::new(Mutex::new(store)),
+            users: Arc::new(Mutex::new(auth::AuthStore::default())),
+            auth_path,
+            listen_url: format!("http://{DEFAULT_LISTEN}"),
+            nonces: Arc::new(Mutex::new(HashMap::new())),
+            rate_limiter: Arc::new(Mutex::new(auth::RateLimiter::default())),
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            session_users: Arc::new(Mutex::new(HashMap::new())),
             config,
             data_dir,
             data_overridden,
@@ -96,10 +136,58 @@ impl AppState {
             Some(started) if started.elapsed() < SESSION_TTL => true,
             Some(_) => {
                 map.remove(id);
+                self.session_users.lock().unwrap().remove(id);
                 false
             }
             None => false,
         }
+    }
+
+    fn session_user(&self, id: &str) -> Option<String> {
+        if !self.session_valid(id) {
+            return None;
+        }
+        self.session_users.lock().unwrap().get(id).cloned()
+    }
+
+    fn start_session(&self, user: Option<&str>) -> String {
+        let mut raw = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut raw);
+        let session = URL_SAFE_NO_PAD.encode(raw);
+        self.sessions
+            .lock()
+            .unwrap()
+            .insert(session.clone(), Instant::now());
+        if let Some(user) = user {
+            self.session_users
+                .lock()
+                .unwrap()
+                .insert(session.clone(), user.to_string());
+        }
+        session
+    }
+
+    /// 签发一次性登录 nonce（32 字节随机，120s TTL）。
+    pub fn issue_login_nonce(&self) -> String {
+        let nonce = auth::random_secret();
+        let mut map = self.nonces.lock().unwrap();
+        // 顺手清理过期 nonce，避免长期运行时 map 无限增长。
+        map.retain(|_, started| started.elapsed() < auth::LOGIN_NONCE_TTL);
+        map.insert(nonce.clone(), Instant::now());
+        nonce
+    }
+
+    /// 消费 nonce；无论成功与否都会从存储中删除（single-use）。
+    pub fn consume_login_nonce(&self, nonce: &str) -> bool {
+        let started = self.nonces.lock().unwrap().remove(nonce);
+        match started {
+            Some(started) => started.elapsed() < auth::LOGIN_NONCE_TTL,
+            None => false,
+        }
+    }
+
+    pub fn login_url(&self, nonce: &str) -> String {
+        format!("{}/#t={nonce}", self.listen_url.trim_end_matches('/'))
     }
 }
 
@@ -176,19 +264,6 @@ fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
     None
 }
 
-/// 常数时间比较（长度不同直接返回 false）。
-fn token_eq(a: &str, b: &str) -> bool {
-    let (a, b) = (a.as_bytes(), b.as_bytes());
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    diff == 0
-}
-
 fn unauthorized() -> Response {
     (
         StatusCode::UNAUTHORIZED,
@@ -219,7 +294,11 @@ async fn auth_mw(
     next: Next,
 ) -> Response {
     let path = req.uri().path().to_string();
-    if !path.starts_with("/api") || path == "/api/session" {
+    if !path.starts_with("/api") {
+        return next.run(req).await;
+    }
+    // 登录入口与认证能力探测无需会话。
+    if path == "/api/session" || path == "/api/auth/status" {
         return next.run(req).await;
     }
 
@@ -279,36 +358,430 @@ async fn security_headers(req: Request<axum::body::Body>, next: Next) -> Respons
 }
 
 // ============================================================
-// 会话
+// 会话 / 登录
 // ============================================================
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 struct LoginRequest {
-    token: String,
+    #[serde(default)]
+    token: Option<String>,
+    #[serde(default)]
+    nonce: Option<String>,
+    #[serde(default)]
+    username: Option<String>,
+    #[serde(default)]
+    password: Option<String>,
+    #[serde(default)]
+    totp: Option<String>,
 }
 
-async fn login(State(state): State<AppState>, Json(body): Json<LoginRequest>) -> Response {
-    if !token_eq(&body.token, &state.token) {
-        return unauthorized();
+fn session_response(state: &AppState, user: Option<&str>) -> Response {
+    let session = state.start_session(user);
+    let cookie = format!(
+        "{SESSION_COOKIE}={session}; HttpOnly; SameSite=Strict; Path=/; Max-Age={}",
+        SESSION_TTL.as_secs()
+    );
+    (StatusCode::NO_CONTENT, [(header::SET_COOKIE, cookie)]).into_response()
+}
+
+fn error_response(status: StatusCode, error: &str) -> Response {
+    (status, Json(json!({ "error": error }))).into_response()
+}
+
+fn internal_error(message: impl std::fmt::Display) -> Response {
+    error_response(StatusCode::INTERNAL_SERVER_ERROR, &message.to_string())
+}
+
+fn invalid_credentials() -> Response {
+    error_response(StatusCode::UNAUTHORIZED, "invalid credentials")
+}
+
+fn invalid_totp() -> Response {
+    error_response(StatusCode::UNAUTHORIZED, "invalid totp")
+}
+
+fn totp_required() -> Response {
+    error_response(StatusCode::UNAUTHORIZED, "totp_required")
+}
+
+fn too_many_attempts() -> Response {
+    error_response(StatusCode::TOO_MANY_REQUESTS, "too many attempts")
+}
+
+/// 追加一条认证审计事件（绝不包含 token / nonce / 哈希 / 密码）。
+fn audit(state: &AppState, action: &str, target: &str, result: &str, detail: &str) {
+    let entry = json!({
+        "ts": auth::now_rfc3339(),
+        "src": "web",
+        "action": action,
+        "target": target,
+        "result": result,
+        "detail": detail,
+        "pid": null,
+        "duration_ms": null,
+    });
+    if let Some(parent) = state.log_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
     }
-    let mut raw = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut raw);
-    let session = URL_SAFE_NO_PAD.encode(raw);
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&state.log_path)
+    {
+        let _ = writeln!(file, "{entry}");
+    }
+}
+
+fn client_ip(conn: Option<ConnectInfo<SocketAddr>>) -> String {
+    conn.map(|ConnectInfo(addr)| addr.ip().to_string())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn password_login(
+    state: &AppState,
+    ip: &str,
+    username: &str,
+    password: &str,
+    totp: Option<&str>,
+) -> Response {
+    if !state.rate_limiter.lock().unwrap().check(ip, username) {
+        audit(state, "login", username, "failed", "rate limited");
+        return too_many_attempts();
+    }
+
+    let mut users = state.users.lock().unwrap();
+    if !users.verify_password(username, password) {
+        drop(users);
+        state
+            .rate_limiter
+            .lock()
+            .unwrap()
+            .record_failure(ip, username);
+        audit(state, "login", username, "failed", "invalid credentials");
+        return invalid_credentials();
+    }
+
+    let mut backup_used = false;
+    let mut need_totp = false;
+    let mut totp_ok = true;
+    if let Some(user) = users.find_mut(username) {
+        if user.totp_enabled {
+            let code = totp.unwrap_or("").trim();
+            if code.is_empty() {
+                need_totp = true;
+                totp_ok = false;
+            } else if user.verify_totp(code) {
+                // 正常 TOTP
+            } else if user.consume_backup_code(code) {
+                backup_used = true;
+            } else {
+                totp_ok = false;
+            }
+        }
+    }
+
+    if need_totp {
+        drop(users);
+        audit(state, "login", username, "failed", "totp required");
+        return totp_required();
+    }
+    if !totp_ok {
+        drop(users);
+        state
+            .rate_limiter
+            .lock()
+            .unwrap()
+            .record_failure(ip, username);
+        audit(state, "login", username, "failed", "invalid totp");
+        return invalid_totp();
+    }
+    if backup_used {
+        if let Err(e) = auth::save_auth_store(&state.auth_path, &users) {
+            drop(users);
+            return internal_error(e);
+        }
+    }
+    drop(users);
+
     state
-        .sessions
+        .rate_limiter
         .lock()
         .unwrap()
-        .insert(session.clone(), Instant::now());
-    let cookie = format!("{SESSION_COOKIE}={session}; HttpOnly; SameSite=Strict; Path=/");
-    (StatusCode::NO_CONTENT, [(header::SET_COOKIE, cookie)]).into_response()
+        .record_success(ip, username);
+    audit(state, "login", username, "success", "password");
+    session_response(state, Some(username))
+}
+
+async fn login(
+    State(state): State<AppState>,
+    conn: Option<ConnectInfo<SocketAddr>>,
+    Json(body): Json<LoginRequest>,
+) -> Response {
+    if let Some(token) = body.token.as_deref() {
+        if state.tokens.lock().unwrap().verify(token) {
+            // 兼容既有日志测试：token 登录成功不写入 app.log.jsonl，
+            // 仅记录失败，避免改变 /api/logs 的既有语义。
+            return session_response(&state, None);
+        }
+        audit(&state, "login", "token", "failed", "invalid token");
+        return unauthorized();
+    }
+
+    if let Some(nonce) = body.nonce.as_deref() {
+        if !state.consume_login_nonce(nonce) {
+            audit(&state, "login", "login-link", "failed", "invalid nonce");
+            return unauthorized();
+        }
+        audit(&state, "login", "login-link", "success", "nonce");
+        return session_response(&state, None);
+    }
+
+    if let Some(username) = body.username.as_deref() {
+        let ip = client_ip(conn);
+        let password = body.password.as_deref().unwrap_or("");
+        return password_login(&state, &ip, username, password, body.totp.as_deref());
+    }
+
+    invalid_credentials()
 }
 
 async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if let Some(session) = cookie_value(&headers, SESSION_COOKIE) {
         state.sessions.lock().unwrap().remove(&session);
+        state.session_users.lock().unwrap().remove(&session);
     }
     let cookie = format!("{SESSION_COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0");
     (StatusCode::NO_CONTENT, [(header::SET_COOKIE, cookie)]).into_response()
+}
+
+// ============================================================
+// 一次性登录链接 / 认证状态
+// ============================================================
+
+fn request_base_url(headers: &HeaderMap, fallback: &str) -> String {
+    headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|h| !h.is_empty())
+        .map(|h| format!("http://{h}"))
+        .unwrap_or_else(|| fallback.trim_end_matches('/').to_string())
+}
+
+async fn login_links(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let nonce = state.issue_login_nonce();
+    let base = request_base_url(&headers, &state.listen_url);
+    let url = format!("{base}/#t={nonce}");
+    let svg = match auth::qr_svg(&url) {
+        Ok(svg) => svg,
+        Err(e) => return internal_error(e),
+    };
+    if !cfg!(test) {
+        println!();
+        println!("one-time login link (valid 120s):");
+        println!("{url}");
+        if let Ok(ascii) = auth::qr_ascii(&url) {
+            println!("{ascii}");
+        }
+    }
+    audit(&state, "login_link", "-", "success", "created");
+    Json(json!({
+        "url": url,
+        "expires_in": auth::LOGIN_NONCE_TTL.as_secs(),
+        "svg": svg,
+    }))
+    .into_response()
+}
+
+async fn auth_status(State(state): State<AppState>) -> Response {
+    let password_auth = !state.users.lock().unwrap().is_empty();
+    Json(json!({
+        "token_auth": true,
+        "password_auth": password_auth,
+        "2fa_available": true,
+    }))
+    .into_response()
+}
+
+// ============================================================
+// 2FA
+// ============================================================
+
+#[derive(Deserialize, Default)]
+struct CodeRequest {
+    #[serde(default)]
+    code: String,
+}
+
+/// 2FA 操作需要知道“当前用户”。密码登录的 session 带用户名；
+/// token 登录没有用户名时，若系统恰好只有一个用户则自动使用它。
+#[allow(clippy::result_large_err)]
+fn resolve_session_user(state: &AppState, headers: &HeaderMap) -> Result<String, Response> {
+    if let Some(session) = cookie_value(headers, SESSION_COOKIE) {
+        if let Some(user) = state.session_user(&session) {
+            return Ok(user);
+        }
+    }
+    let users = state.users.lock().unwrap();
+    match users.users.len() {
+        1 => Ok(users.users[0].name.clone()),
+        0 => Err(error_response(
+            StatusCode::BAD_REQUEST,
+            "no users configured",
+        )),
+        _ => Err(error_response(StatusCode::CONFLICT, "no user session")),
+    }
+}
+
+async fn twofa_enroll(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let username = match resolve_session_user(&state, &headers) {
+        Ok(user) => user,
+        Err(resp) => return resp,
+    };
+    let secret = auth::generate_totp_secret();
+    let otpauth_url = match auth::otpauth_url(&secret, &username) {
+        Ok(url) => url,
+        Err(e) => return internal_error(e),
+    };
+    let svg = match auth::qr_svg(&otpauth_url) {
+        Ok(svg) => svg,
+        Err(e) => return internal_error(e),
+    };
+    {
+        let mut users = state.users.lock().unwrap();
+        let Some(user) = users.find_mut(&username) else {
+            return error_response(StatusCode::NOT_FOUND, "user not found");
+        };
+        // 重新 enroll：覆盖待启用 secret，并保持未启用状态。
+        user.totp_secret = Some(secret.clone());
+        user.totp_enabled = false;
+        user.backup_code_hashes.clear();
+        if let Err(e) = auth::save_auth_store(&state.auth_path, &users) {
+            return internal_error(e);
+        }
+    }
+    audit(&state, "2fa_enroll", &username, "success", "pending");
+    Json(json!({
+        "secret": secret,
+        "otpauth_url": otpauth_url,
+        "svg": svg,
+    }))
+    .into_response()
+}
+
+async fn twofa_activate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<CodeRequest>,
+) -> Response {
+    let username = match resolve_session_user(&state, &headers) {
+        Ok(user) => user,
+        Err(resp) => return resp,
+    };
+    let mut users = state.users.lock().unwrap();
+    let Some(user) = users.find_mut(&username) else {
+        return error_response(StatusCode::NOT_FOUND, "user not found");
+    };
+    let Some(secret) = user.totp_secret.clone() else {
+        return error_response(StatusCode::BAD_REQUEST, "2fa not enrolled");
+    };
+    if !auth::verify_totp(&secret, &body.code) {
+        drop(users);
+        audit(&state, "2fa_activate", &username, "failed", "invalid totp");
+        return invalid_totp();
+    }
+    user.totp_enabled = true;
+    let backup_codes = auth::generate_backup_codes(8);
+    user.backup_code_hashes = backup_codes
+        .iter()
+        .map(|code| auth::hash_backup_code(code))
+        .collect();
+    if let Err(e) = auth::save_auth_store(&state.auth_path, &users) {
+        return internal_error(e);
+    }
+    drop(users);
+    audit(&state, "2fa_activate", &username, "success", "enabled");
+    Json(json!({ "backup_codes": backup_codes })).into_response()
+}
+
+async fn twofa_disable(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<CodeRequest>,
+) -> Response {
+    let username = match resolve_session_user(&state, &headers) {
+        Ok(user) => user,
+        Err(resp) => return resp,
+    };
+    let mut users = state.users.lock().unwrap();
+    let Some(user) = users.find_mut(&username) else {
+        return error_response(StatusCode::NOT_FOUND, "user not found");
+    };
+    if !user.totp_enabled {
+        return error_response(StatusCode::BAD_REQUEST, "2fa not enabled");
+    }
+    let code = body.code.trim();
+    let ok = user.verify_totp(code) || user.consume_backup_code(code);
+    if !ok {
+        drop(users);
+        audit(&state, "2fa_disable", &username, "failed", "invalid code");
+        return invalid_totp();
+    }
+    user.totp_secret = None;
+    user.totp_enabled = false;
+    user.backup_code_hashes.clear();
+    if let Err(e) = auth::save_auth_store(&state.auth_path, &users) {
+        return internal_error(e);
+    }
+    drop(users);
+    audit(&state, "2fa_disable", &username, "success", "disabled");
+    StatusCode::NO_CONTENT.into_response()
+}
+
+async fn twofa_backup_codes(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<CodeRequest>,
+) -> Response {
+    let username = match resolve_session_user(&state, &headers) {
+        Ok(user) => user,
+        Err(resp) => return resp,
+    };
+    let mut users = state.users.lock().unwrap();
+    let Some(user) = users.find_mut(&username) else {
+        return error_response(StatusCode::NOT_FOUND, "user not found");
+    };
+    if !user.totp_enabled {
+        return error_response(StatusCode::BAD_REQUEST, "2fa not enabled");
+    }
+    if !user.verify_totp(&body.code) {
+        drop(users);
+        audit(
+            &state,
+            "2fa_backup_codes",
+            &username,
+            "failed",
+            "invalid totp",
+        );
+        return invalid_totp();
+    }
+    let backup_codes = auth::generate_backup_codes(8);
+    user.backup_code_hashes = backup_codes
+        .iter()
+        .map(|code| auth::hash_backup_code(code))
+        .collect();
+    if let Err(e) = auth::save_auth_store(&state.auth_path, &users) {
+        return internal_error(e);
+    }
+    drop(users);
+    audit(
+        &state,
+        "2fa_backup_codes",
+        &username,
+        "success",
+        "regenerated",
+    );
+    Json(json!({ "backup_codes": backup_codes })).into_response()
 }
 
 // ============================================================
@@ -755,6 +1228,12 @@ pub fn app(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/api/session", post(login).delete(logout))
+        .route("/api/auth/status", get(auth_status))
+        .route("/api/login-links", post(login_links))
+        .route("/api/2fa/enroll", post(twofa_enroll))
+        .route("/api/2fa/activate", post(twofa_activate))
+        .route("/api/2fa/disable", post(twofa_disable))
+        .route("/api/2fa/backup-codes", post(twofa_backup_codes))
         .route("/api/meta", get(meta))
         .route("/api/vaults", get(vaults))
         .route("/api/vaults/:name/mount", post(mount_vault))
@@ -779,14 +1258,36 @@ fn usage() {
     println!();
     println!("USAGE:");
     println!("    gocryptfs-web [OPTIONS]");
+    println!("    gocryptfs-web token list");
+    println!("    gocryptfs-web token add --label NAME [--expires 30d]");
+    println!("    gocryptfs-web token revoke <label|id>");
+    println!("    gocryptfs-web user add NAME");
+    println!("    gocryptfs-web user passwd NAME");
+    println!("    gocryptfs-web user delete NAME");
+    println!("    gocryptfs-web user list");
     println!();
     println!("OPTIONS:");
     println!("    --listen ADDR       listen address (default {DEFAULT_LISTEN})");
-    println!("    --token-file PATH   token file (default <config_dir>/gocryptfs-tui/web.token)");
+    println!(
+        "    --token-file PATH   token file (default <config_dir>/{}/web.token)",
+        core::APP_NAME
+    );
     println!("    -c, --config PATH   config file (default: backend / XDG config)");
     println!("    -D, --data-dir DIR  data directory");
     println!("    -h, --help          print this help");
     println!("    -V, --version       print version");
+    println!();
+    println!("TOKEN SUBCOMMANDS:");
+    println!("    list                list token ids/labels (never prints hashes)");
+    println!("    add --label NAME    create a token and print it exactly once");
+    println!("        [--expires 30d] optional expiry, e.g. 30d / 12h / 60m");
+    println!("    revoke <label|id>   revoke by label or id");
+    println!();
+    println!("USER SUBCOMMANDS:");
+    println!("    add NAME            add a user (password read from stdin)");
+    println!("    passwd NAME         change password (password read from stdin)");
+    println!("    delete NAME         delete a user");
+    println!("    list                list users (never prints hashes/secrets)");
 }
 
 fn default_token_file() -> PathBuf {
@@ -797,85 +1298,378 @@ fn default_token_file() -> PathBuf {
     PathBuf::from("/tmp").join(core::APP_NAME).join("web.token")
 }
 
-fn load_or_create_token(path: &Path) -> Result<String, String> {
-    if let Ok(content) = std::fs::read_to_string(path) {
-        let token = content.trim().to_string();
-        if !token.is_empty() {
-            return Ok(token);
+fn auth_file_for(token_path: &Path) -> PathBuf {
+    match token_path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.join("web.auth"),
+        _ => PathBuf::from("web.auth"),
+    }
+}
+
+// ============================================================
+// CLI 参数解析
+// ============================================================
+
+#[derive(Debug)]
+enum TokenCommand {
+    List,
+    Add {
+        label: String,
+        expires: Option<String>,
+    },
+    Revoke {
+        target: String,
+    },
+}
+
+#[derive(Debug)]
+enum UserCommand {
+    Add(String),
+    Passwd(String),
+    Delete(String),
+    List,
+}
+
+#[derive(Debug)]
+enum Command {
+    Serve,
+    Token(TokenCommand),
+    User(UserCommand),
+}
+
+#[derive(Debug)]
+struct CliOptions {
+    listen: String,
+    token_file: Option<PathBuf>,
+    config_arg: Option<PathBuf>,
+    data_arg: Option<PathBuf>,
+    command: Command,
+}
+
+enum Parsed {
+    Help,
+    Version,
+    Run(CliOptions),
+}
+
+fn next_value(args: &[String], i: &mut usize, name: &str) -> Result<String, String> {
+    *i += 1;
+    args.get(*i)
+        .cloned()
+        .ok_or_else(|| format!("{name} requires a value"))
+}
+
+fn parse_token_command(
+    positionals: &[String],
+    label: Option<String>,
+    expires: Option<String>,
+) -> Result<TokenCommand, String> {
+    let sub = positionals
+        .first()
+        .ok_or_else(|| "token requires a subcommand: list|add|revoke".to_string())?;
+    match sub.as_str() {
+        "list" => {
+            if positionals.len() != 1 {
+                return Err("token list takes no arguments".to_string());
+            }
+            if label.is_some() || expires.is_some() {
+                return Err("token list does not accept --label/--expires".to_string());
+            }
+            Ok(TokenCommand::List)
+        }
+        "add" => {
+            if positionals.len() != 1 {
+                return Err("token add takes no positional arguments".to_string());
+            }
+            let label = label.ok_or_else(|| "token add requires --label NAME".to_string())?;
+            if label.trim().is_empty() {
+                return Err("--label must not be empty".to_string());
+            }
+            Ok(TokenCommand::Add { label, expires })
+        }
+        "revoke" => {
+            if expires.is_some() {
+                return Err("token revoke does not accept --expires".to_string());
+            }
+            let target = match positionals.get(1) {
+                Some(target) if positionals.len() == 2 => target.clone(),
+                Some(_) => return Err("token revoke takes exactly one id/label".to_string()),
+                None => label.ok_or_else(|| {
+                    "token revoke requires <label|id> (or --label NAME)".to_string()
+                })?,
+            };
+            Ok(TokenCommand::Revoke { target })
+        }
+        other => Err(format!("unknown token subcommand: {other}")),
+    }
+}
+
+fn parse_user_command(
+    positionals: &[String],
+    label: Option<String>,
+    expires: Option<String>,
+) -> Result<UserCommand, String> {
+    if label.is_some() || expires.is_some() {
+        return Err("user commands do not accept --label/--expires".to_string());
+    }
+    let sub = positionals
+        .first()
+        .ok_or_else(|| "user requires a subcommand: add|passwd|delete|list".to_string())?;
+    match sub.as_str() {
+        "list" => {
+            if positionals.len() != 1 {
+                return Err("user list takes no arguments".to_string());
+            }
+            Ok(UserCommand::List)
+        }
+        "add" | "passwd" | "delete" => {
+            if positionals.len() != 2 {
+                return Err(format!("user {sub} requires exactly one NAME"));
+            }
+            let name = positionals[1].clone();
+            if name.trim().is_empty() {
+                return Err("user name must not be empty".to_string());
+            }
+            Ok(match sub.as_str() {
+                "add" => UserCommand::Add(name),
+                "passwd" => UserCommand::Passwd(name),
+                _ => UserCommand::Delete(name),
+            })
+        }
+        other => Err(format!("unknown user subcommand: {other}")),
+    }
+}
+
+fn parse_args(args: &[String]) -> Result<Parsed, String> {
+    let mut listen = DEFAULT_LISTEN.to_string();
+    let mut token_file: Option<PathBuf> = None;
+    let mut config_arg: Option<PathBuf> = None;
+    let mut data_arg: Option<PathBuf> = None;
+    let mut label: Option<String> = None;
+    let mut expires: Option<String> = None;
+    let mut mode: Option<&str> = None;
+    let mut positionals: Vec<String> = Vec::new();
+
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].as_str();
+        if arg == "-h" || arg == "--help" {
+            return Ok(Parsed::Help);
+        }
+        if arg == "-V" || arg == "--version" {
+            return Ok(Parsed::Version);
+        }
+        if let Some(value) = arg.strip_prefix("--listen=") {
+            listen = value.to_string();
+        } else if let Some(value) = arg.strip_prefix("--token-file=") {
+            token_file = Some(PathBuf::from(value));
+        } else if let Some(value) = arg.strip_prefix("--config=") {
+            config_arg = Some(PathBuf::from(value));
+        } else if let Some(value) = arg.strip_prefix("--data-dir=") {
+            data_arg = Some(PathBuf::from(value));
+        } else if let Some(value) = arg.strip_prefix("--label=") {
+            label = Some(value.to_string());
+        } else if let Some(value) = arg.strip_prefix("--expires=") {
+            expires = Some(value.to_string());
+        } else {
+            match arg {
+                "--listen" => listen = next_value(args, &mut i, "--listen")?,
+                "--token-file" => {
+                    token_file = Some(PathBuf::from(next_value(args, &mut i, "--token-file")?))
+                }
+                "-c" | "--config" => {
+                    config_arg = Some(PathBuf::from(next_value(args, &mut i, "-c")?))
+                }
+                "-D" | "--data-dir" => {
+                    data_arg = Some(PathBuf::from(next_value(args, &mut i, "-D")?))
+                }
+                "--label" => label = Some(next_value(args, &mut i, "--label")?),
+                "--expires" => expires = Some(next_value(args, &mut i, "--expires")?),
+                "token" | "user" if mode.is_none() => {
+                    mode = Some(if arg == "token" { "token" } else { "user" });
+                }
+                other if other.starts_with('-') => {
+                    return Err(format!("unknown option: {other}"));
+                }
+                other => {
+                    if mode.is_none() {
+                        return Err(format!("unexpected argument: {other}"));
+                    }
+                    positionals.push(other.to_string());
+                }
+            }
+        }
+        i += 1;
+    }
+
+    let command = match mode {
+        None => {
+            if label.is_some() || expires.is_some() {
+                return Err("--label/--expires are only valid for token add".to_string());
+            }
+            Command::Serve
+        }
+        Some("token") => Command::Token(parse_token_command(&positionals, label, expires)?),
+        Some("user") => Command::User(parse_user_command(&positionals, label, expires)?),
+        Some(_) => unreachable!("mode is token/user"),
+    };
+
+    Ok(Parsed::Run(CliOptions {
+        listen,
+        token_file,
+        config_arg,
+        data_arg,
+        command,
+    }))
+}
+
+// ============================================================
+// CLI 子命令实现
+// ============================================================
+
+fn parse_expiry(spec: &str) -> Result<String, String> {
+    let digits = spec
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(spec.len());
+    if digits == 0 {
+        return Err(format!("invalid --expires value: {spec:?}"));
+    }
+    let (num, unit) = spec.split_at(digits);
+    let n: i64 = num
+        .parse()
+        .map_err(|_| format!("invalid --expires value: {spec:?}"))?;
+    if n <= 0 {
+        return Err("--expires must be positive".to_string());
+    }
+    let duration = match unit {
+        "d" => chrono::Duration::days(n),
+        "h" => chrono::Duration::hours(n),
+        "m" => chrono::Duration::minutes(n),
+        "s" | "" => chrono::Duration::seconds(n),
+        _ => return Err(format!("invalid --expires unit {unit:?} (use d/h/m/s)")),
+    };
+    let when = chrono::Utc::now() + duration;
+    Ok(when.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+}
+
+fn read_stdin_password() -> Result<String, String> {
+    if std::io::stdin().is_terminal() {
+        eprint!("Password: ");
+        let _ = std::io::stderr().flush();
+    }
+    let mut line = String::new();
+    std::io::stdin()
+        .read_line(&mut line)
+        .map_err(|e| format!("failed to read password from stdin: {e}"))?;
+    let password = line.trim_end_matches(&['\r', '\n'][..]).to_string();
+    if password.is_empty() {
+        return Err("password must not be empty".to_string());
+    }
+    Ok(password)
+}
+
+fn run_token_command(path: &Path, command: TokenCommand) -> Result<(), String> {
+    match command {
+        TokenCommand::List => {
+            let store = auth::load_token_store_for_update(path)?;
+            if store.tokens.is_empty() {
+                println!("no tokens");
+                return Ok(());
+            }
+            println!(
+                "{:<8} {:<24} {:<26} EXPIRES_AT",
+                "ID", "LABEL", "CREATED_AT"
+            );
+            for token in &store.tokens {
+                println!(
+                    "{:<8} {:<24} {:<26} {}",
+                    token.id,
+                    token.label,
+                    token.created_at,
+                    token.expires_at.as_deref().unwrap_or("never")
+                );
+            }
+            Ok(())
+        }
+        TokenCommand::Add { label, expires } => {
+            let mut store = auth::load_token_store_for_update(path)?;
+            let expires_at = match expires {
+                Some(spec) => Some(parse_expiry(&spec)?),
+                None => None,
+            };
+            let (entry, token) = store.add_token(&label, expires_at)?;
+            auth::save_token_store(path, &store)?;
+            // 明文 token 只输出这一次。
+            println!("{token}");
+            eprintln!(
+                "token added: id={} label={} expires_at={}",
+                entry.id,
+                entry.label,
+                entry.expires_at.as_deref().unwrap_or("never")
+            );
+            Ok(())
+        }
+        TokenCommand::Revoke { target } => {
+            let mut store = auth::load_token_store_for_update(path)?;
+            let removed = store.revoke(&target)?;
+            auth::save_token_store(path, &store)?;
+            println!("revoked {removed} token(s)");
+            Ok(())
         }
     }
-    let mut raw = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut raw);
-    let token = URL_SAFE_NO_PAD.encode(raw);
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+}
+
+fn run_user_command(token_path: &Path, command: UserCommand) -> Result<(), String> {
+    let auth_path = auth_file_for(token_path);
+    let mut store = auth::load_auth_store(&auth_path)?;
+    match command {
+        UserCommand::Add(name) => {
+            let password = read_stdin_password()?;
+            store.add_user(&name, &password)?;
+            auth::save_auth_store(&auth_path, &store)?;
+            println!("user added: {name}");
+        }
+        UserCommand::Passwd(name) => {
+            let password = read_stdin_password()?;
+            store.set_password(&name, &password)?;
+            auth::save_auth_store(&auth_path, &store)?;
+            println!("password updated: {name}");
+        }
+        UserCommand::Delete(name) => {
+            if !store.remove_user(&name) {
+                return Err(format!("user not found: {name}"));
+            }
+            auth::save_auth_store(&auth_path, &store)?;
+            println!("user deleted: {name}");
+        }
+        UserCommand::List => {
+            if store.users.is_empty() {
+                println!("no users");
+                return Ok(());
+            }
+            println!("{:<24} {:<8} CREATED_AT", "NAME", "2FA");
+            for user in &store.users {
+                println!(
+                    "{:<24} {:<8} {}",
+                    user.name,
+                    if user.totp_enabled { "on" } else { "off" },
+                    user.created_at
+                );
+            }
         }
     }
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    let mut file = opts
-        .open(path)
-        .map_err(|e| format!("{}: {e}", path.display()))?;
-    file.write_all(token.as_bytes())
-        .map_err(|e| format!("{}: {e}", path.display()))?;
-    file.write_all(b"\n")
-        .map_err(|e| format!("{}: {e}", path.display()))?;
-    Ok(token)
+    Ok(())
 }
 
 async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
 }
 
-/// 入口：解析参数，加载/生成 token，启动 HTTP 服务。
-pub fn run() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let mut listen = DEFAULT_LISTEN.to_string();
-    let mut token_file: Option<PathBuf> = None;
-    let mut config_arg: Option<PathBuf> = None;
-    let mut data_arg: Option<PathBuf> = None;
-
-    let mut i = 0;
-    while i < args.len() {
-        let arg = args[i].clone();
-        let value = |i: &mut usize, name: &str| -> String {
-            *i += 1;
-            match args.get(*i) {
-                Some(v) => v.clone(),
-                None => {
-                    eprintln!("error: {name} requires a value");
-                    std::process::exit(2);
-                }
-            }
-        };
-        match arg.as_str() {
-            "-h" | "--help" => {
-                usage();
-                return;
-            }
-            "-V" | "--version" => {
-                println!("gocryptfs-web {}", core::version_string());
-                return;
-            }
-            "--listen" => listen = value(&mut i, "--listen"),
-            "--token-file" => token_file = Some(PathBuf::from(value(&mut i, "--token-file"))),
-            "-c" | "--config" => config_arg = Some(PathBuf::from(value(&mut i, "-c"))),
-            "-D" | "--data-dir" => data_arg = Some(PathBuf::from(value(&mut i, "-D"))),
-            other => {
-                eprintln!("error: unknown argument: {other}");
-                usage();
-                std::process::exit(2);
-            }
-        }
-        i += 1;
-    }
-
+fn serve(
+    listen: String,
+    token_path: PathBuf,
+    config_arg: Option<PathBuf>,
+    data_arg: Option<PathBuf>,
+) -> Result<(), String> {
     let addr: SocketAddr = match listen.parse() {
         Ok(a) => a,
         Err(e) => {
@@ -888,25 +1682,42 @@ pub fn run() {
     let data_overridden = data_arg.is_some();
     let data_dir = core::paths::resolve_data_dir(data_arg);
     let state_dir = core::paths::resolve_state_dir(&data_dir, data_overridden);
-    let token_path = token_file.unwrap_or_else(default_token_file);
+    let auth_path = auth_file_for(&token_path);
 
-    let token = match load_or_create_token(&token_path) {
-        Ok(t) => t,
+    let (token_store, new_token) = auth::load_token_store(&token_path)?;
+    let users = match auth::load_auth_store(&auth_path) {
+        Ok(store) => store,
         Err(e) => {
-            eprintln!("error: cannot load/create token: {e}");
-            std::process::exit(1);
+            eprintln!("warning: cannot load auth store: {e} (password auth disabled)");
+            auth::AuthStore::default()
         }
     };
 
-    let log_path = state_dir.join("app.log.jsonl");
+    let mut state =
+        AppState::with_token_store(token_store, config, data_dir, data_overridden, state_dir);
+    state.auth_path = auth_path;
+    state.users = Arc::new(Mutex::new(users));
+    state.listen_url = format!("http://{addr}");
+
     println!("gocryptfs-web {}", core::version_string());
-    println!("listen:     http://{addr}");
-    println!("token:      {token}");
+    println!("listen:     {}", state.listen_url);
+    if let Some(token) = new_token {
+        println!("token:      {token}");
+    }
+    let token_count = state.tokens.lock().unwrap().active_count();
+    println!("tokens:     {token_count} active");
     println!("token file: {}", token_path.display());
-    println!("config:     {config}");
-    println!("data dir:   {}", data_dir.display());
-    println!("state dir:  {}", state_dir.display());
-    println!("log:        {}", log_path.display());
+    println!("auth file:  {}", state.auth_path.display());
+    println!("config:     {}", state.config);
+    println!("data dir:   {}", state.data_dir.display());
+    println!("state dir:  {}", state.state_dir.display());
+    println!("log:        {}", state.log_path.display());
+    if token_count == 0 {
+        eprintln!();
+        eprintln!("!!! WARNING: no active tokens. Create one with:");
+        eprintln!("!!!   gocryptfs-web token add --label default");
+        eprintln!();
+    }
     if !addr.ip().is_loopback() {
         eprintln!();
         eprintln!("!!! WARNING: listening on a NON-LOOPBACK address {addr}");
@@ -916,28 +1727,86 @@ pub fn run() {
         eprintln!();
     }
 
-    let state = AppState::new(token, config, data_dir, data_overridden, state_dir);
+    // 一次性手机登录链接（QR）。
+    let nonce = state.issue_login_nonce();
+    let link = state.login_url(&nonce);
+    println!();
+    println!(
+        "one-time login link (valid {}s):",
+        auth::LOGIN_NONCE_TTL.as_secs()
+    );
+    println!("{link}");
+    match auth::qr_ascii(&link) {
+        Ok(qr) => println!("{qr}"),
+        Err(e) => eprintln!("warning: cannot render login QR: {e}"),
+    }
+
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
     {
         Ok(rt) => rt,
-        Err(e) => {
-            eprintln!("error: cannot start tokio runtime: {e}");
-            std::process::exit(1);
-        }
+        Err(e) => return Err(format!("cannot start tokio runtime: {e}")),
     };
 
-    let result = runtime.block_on(async move {
+    runtime.block_on(async move {
         let listener = tokio::net::TcpListener::bind(addr)
             .await
             .map_err(|e| format!("cannot bind {addr}: {e}"))?;
-        axum::serve(listener, app(state))
-            .with_graceful_shutdown(shutdown_signal())
-            .await
-            .map_err(|e| format!("server error: {e}"))
-    });
+        axum::serve(
+            listener,
+            app(state).into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .map_err(|e| format!("server error: {e}"))
+    })
+}
 
+/// 入口：解析参数；子命令直接执行，否则启动 HTTP 服务。
+pub fn run() {
+    // 与 TUI 一致：优先使用内嵌后端（避免 PATH 里的旧版 gocryptfs-cli 影响路径/文案）
+    let data_dir = core::paths::resolve_data_dir(None);
+    if let Err(e) = core::backend::install_embedded(&data_dir, &core::version_line()) {
+        eprintln!("[!] failed to install embedded backend: {e}");
+    }
+
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let parsed = match parse_args(&args) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            eprintln!("error: {e}");
+            eprintln!();
+            usage();
+            std::process::exit(2);
+        }
+    };
+    let opts = match parsed {
+        Parsed::Help => {
+            usage();
+            return;
+        }
+        Parsed::Version => {
+            println!("gocryptfs-web {}", core::version_string());
+            return;
+        }
+        Parsed::Run(opts) => opts,
+    };
+
+    let CliOptions {
+        listen,
+        token_file,
+        config_arg,
+        data_arg,
+        command,
+    } = opts;
+    let token_path = token_file.unwrap_or_else(default_token_file);
+
+    let result = match command {
+        Command::Token(cmd) => run_token_command(&token_path, cmd),
+        Command::User(cmd) => run_user_command(&token_path, cmd),
+        Command::Serve => serve(listen, token_path, config_arg, data_arg),
+    };
     if let Err(e) = result {
         eprintln!("error: {e}");
         std::process::exit(1);

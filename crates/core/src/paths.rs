@@ -71,7 +71,8 @@ pub fn resolve_config(cli_opt: Option<PathBuf>) -> String {
     let raw = if let Some(p) = cli_opt {
         p.to_string_lossy().to_string()
     } else if let Some(p) = backend_config_path() {
-        p
+        // 旧版 Shell 后端（仍叫 gocryptfs-tui）会返回旧目录；归一化到新目录名
+        normalize_legacy_app_dir(&p)
     } else if let Some(cfg) = dirs::config_dir() {
         // dirs::config_dir() 已遵循 $XDG_CONFIG_HOME，其次才是 ~/.config
         cfg.join(APP_NAME)
@@ -89,6 +90,29 @@ pub fn resolve_config(cli_opt: Option<PathBuf>) -> String {
         String::new()
     };
     absolute_path(&raw)
+}
+
+/// 把路径里的旧应用目录名（`gocryptfs-tui`）换成新的 `gocryptfs-ui`。
+/// 只替换「父目录名恰好等于旧名」的情况，不影响用户自定义路径。
+pub fn normalize_legacy_app_dir(p: &str) -> String {
+    let path = PathBuf::from(p);
+    let parent_is_legacy = path
+        .parent()
+        .and_then(|d| d.file_name())
+        .map(|n| n == LEGACY_APP_NAME)
+        .unwrap_or(false);
+    if !parent_is_legacy {
+        return p.to_string();
+    }
+    let parent = match path.parent() {
+        Some(d) => d,
+        None => return p.to_string(),
+    };
+    let mut new_path = parent.with_file_name(APP_NAME);
+    if let Some(name) = path.file_name() {
+        new_path.push(name);
+    }
+    new_path.to_string_lossy().to_string()
 }
 
 /// 问 Shell 后端要配置路径（`gocryptfs-cli config`），失败返回 None。
