@@ -158,21 +158,25 @@ export async function getVaults() {
   return [];
 }
 
-export async function mountVault(name, passphrase) {
+export async function mountVault(name, passphrase, lang) {
+  const body = { passphrase };
+  if (lang) body.lang = lang;
   const data = await json(
     await request(`/api/vaults/${encodeURIComponent(name)}/mount`, {
       method: 'POST',
-      body: { passphrase }
+      body
     })
   );
   return jobIdOf(data);
 }
 
-export async function umountVault(name) {
+export async function umountVault(name, lang) {
+  const body = { force: false };
+  if (lang) body.lang = lang;
   const data = await json(
     await request(`/api/vaults/${encodeURIComponent(name)}/umount`, {
       method: 'POST',
-      body: { force: false }
+      body
     })
   );
   return jobIdOf(data);
@@ -196,4 +200,9 @@ export async function getLogs(limit = 200) {
 
 export async function getMeta() {
   return (await json(await request('/api/meta'))) || {};
+}
+
+// Current session 2FA status: {user, enabled, can_enable, backup_codes}
+export async function get2faStatus() {
+  return (await json(await request('/api/2fa/status'))) || {};
 }

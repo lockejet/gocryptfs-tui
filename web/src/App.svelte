@@ -5,15 +5,15 @@
     themeMode,
     initTheme,
     cycleTheme,
-    themeLabel,
     themeIcon
   } from './theme.js';
+  import { detectLang, makeT, saveLang, t as translate } from './i18n.js';
 
   const TABS = [
-    { id: 'vaults', label: 'Vaults' },
-    { id: 'logs', label: 'Logs' },
-    { id: 'meta', label: 'Meta' },
-    { id: 'security', label: 'Security' }
+    { id: 'vaults', labelKey: 'nav.vaults' },
+    { id: 'logs', labelKey: 'nav.logs' },
+    { id: 'meta', labelKey: 'nav.meta' },
+    { id: 'security', labelKey: 'nav.security' }
   ];
 
   const LOOPBACK_HOSTS = ['localhost', '127.0.0.1', '::1', '[::1]'];
@@ -64,7 +64,7 @@
   let mountBusy = false;
   let passInput;
 
-  // one-time login link (手机登录)
+  // one-time login link (phone sign-in)
   let qr = null;
   let qrOpen = false;
   let qrBusy = false;
@@ -79,6 +79,32 @@
   let enrollBusy = false;
   let enrollError = '';
   let backupCodes = null;
+  // 2FA status: prompt after sign-in when not enabled yet (default: off).
+  let twofaStatus = null;
+  let twofaDismissed = (() => {
+    try {
+      return localStorage.getItem('gfs-2fa-dismissed') === '1';
+    } catch (_) {
+      return false;
+    }
+  })();
+
+  async function loadTwofaStatus() {
+    try {
+      twofaStatus = await api.get2faStatus();
+    } catch (_) {
+      twofaStatus = null;
+    }
+  }
+
+  function dismissTwofaPrompt() {
+    twofaDismissed = true;
+    try {
+      localStorage.setItem('gfs-2fa-dismissed', '1');
+    } catch (_) {
+      /* ignore */
+    }
+  }
   let backupOrigin = ''; // 'activate' | 'regenerate'
   let disableCode = '';
   let disableBusy = false;
@@ -96,6 +122,48 @@
   $: metaPaths = (meta && meta.paths) || {};
   $: metaDeps = (meta && (meta.deps || meta.dependencies)) || {};
   $: showPasswordTab = authStatus.password_auth === true;
+
+  // --- i18n ----------------------------------------------------------------
+
+  let lang = detectLang();
+  $: tr = makeT(lang);
+  $: nextTheme = theme === 'auto' ? 'light' : theme === 'light' ? 'dark' : 'auto';
+  $: applyLang(lang);
+
+  function applyLang(code) {
+    if (typeof document === 'undefined') return;
+    document.documentElement.lang = code === 'zh' ? 'zh-CN' : 'en';
+    document.title = translate(code, 'app.title');
+  }
+
+  function toggleLang() {
+    lang = lang === 'zh' ? 'en' : 'zh';
+    saveLang(lang);
+    applyLang(lang);
+  }
+
+  // Localized error state. Known failures keep a key (so a language switch
+  // re-renders them); raw server text is shown as-is.
+  function trErr(key, vars) {
+    return { key, vars: vars || null };
+  }
+
+  function rawErr(text) {
+    return { raw: text };
+  }
+
+  function errText(value, translateFn) {
+    if (!value) return '';
+    if (typeof value === 'string') return value;
+    if (value.key) return translateFn(value.key, value.vars);
+    return value.raw || '';
+  }
+
+  function apiErr(e, fallbackKey) {
+    if (e && e.status === 0) return trErr('login.serverUnreachable');
+    if (e && e.message) return rawErr(e.message);
+    return trErr(fallbackKey || 'common.error');
+  }
 
   onMount(() => {
     const stopTheme = initTheme();
@@ -146,8 +214,8 @@
       } catch (err) {
         loginError =
           err.status === 401 || err.status === 400
-            ? 'This one-time login link is invalid or has expired.'
-            : err.message;
+            ? trErr('login.linkExpired')
+            : apiErr(err, 'login.failed');
       } finally {
         // Never keep a consumed/expired nonce in the URL.
         stripHash();
@@ -158,23 +226,23 @@
       vaults = (await api.getVaults()).map(normalizeVault);
       authed = true;
       loginError = '';
+      loadTwofaStatus();
     } catch (err) {
       authed = false;
-      if (err.status !== 401 && !loginError) loginError = err.message;
+      if (err.status !== 401 && !loginError) loginError = apiErr(err, 'login.failed');
     } finally {
       checking = false;
     }
   }
 
-  // 服务器上执行 `gocryptfs-web user add <name>` 后无需重启：重新拉取状态即可
+  // After running `gocryptfs-web user add <name>` on the server, refetching the
+  // status is enough; no restart is needed.
   async function recheckAuth() {
     try {
       authStatus = await api.authStatus();
-      loginError = authStatus.password_auth
-        ? ''
-        : 'Still no password users. Run `gocryptfs-web user add <name>` on the server.';
+      loginError = authStatus.password_auth ? '' : trErr('login.noUsers');
     } catch (e) {
-      loginError = 'Cannot reach the server.';
+      loginError = trErr('login.serverUnreachable');
     }
   }
 
@@ -199,7 +267,7 @@
       vaults = data.map(normalizeVault);
     } catch (err) {
       if (err.status === 401) return onUnauthorized();
-      vaultsError = err.message;
+      vaultsError = apiErr(err, 'vaults.loadFailed');
     } finally {
       vaultsLoading = false;
     }
@@ -212,7 +280,7 @@
       logs = await api.getLogs(200);
     } catch (err) {
       if (err.status === 401) return onUnauthorized();
-      logsError = err.message;
+      logsError = apiErr(err, 'logs.loadFailed');
       logs = [];
     } finally {
       logsLoading = false;
@@ -226,7 +294,7 @@
       meta = await api.getMeta();
     } catch (err) {
       if (err.status === 401) return onUnauthorized();
-      metaError = err.message;
+      metaError = apiErr(err, 'meta.loadFailed');
       meta = null;
     } finally {
       metaLoading = false;
@@ -245,7 +313,7 @@
     closeAllStreams();
     jobs = {};
     authed = false;
-    loginError = 'Session expired. Please sign in again.';
+    loginError = trErr('login.expired');
   }
 
   // --- login ---------------------------------------------------------------
@@ -259,15 +327,15 @@
   }
 
   function loginMessage(err) {
-    if (err.status === 429) return 'Too many attempts. Please wait a minute and try again.';
+    if (err.status === 429) return trErr('login.rateLimited');
     if (err.status === 401) {
       const msg = String(err.message || '').toLowerCase();
       if (msg.includes('totp_required') || msg.includes('totp required')) return '';
-      if (msg.includes('totp') || msg.includes('backup')) return 'Invalid authentication code.';
-      return loginMode === 'token' ? 'Invalid token.' : 'Invalid username or password.';
+      if (msg.includes('totp') || msg.includes('backup')) return trErr('login.invalidCode');
+      return loginMode === 'token' ? trErr('login.invalidToken') : trErr('login.invalidCredentials');
     }
-    if (err.status === 0) return 'Cannot reach the server. Check that it is running.';
-    return err.message || 'Sign-in failed.';
+    if (err.status === 0) return trErr('login.serverUnreachable');
+    return trErr('login.failed');
   }
 
   async function submitLogin() {
@@ -286,13 +354,14 @@
       authed = true;
       tab = 'vaults';
       await loadVaults();
+      loadTwofaStatus();
     } catch (err) {
       const msg = String(err.message || '').toLowerCase();
       if (err.status === 401 && msg.includes('totp')) {
         totpRequired = true;
         loginError = msg.includes('required')
-          ? 'Enter the 6-digit code from your authenticator app.'
-          : 'Invalid authentication code. Try again or use a backup code.';
+          ? trErr('login.totpRequired')
+          : trErr('login.invalidCodeTry');
         tick().then(() => totpInput && totpInput.focus());
       } else {
         loginError = loginMessage(err);
@@ -338,12 +407,15 @@
     qrCopied = false;
     try {
       const data = await api.createLoginLink();
-      if (!data || !data.svg) throw new api.ApiError('Server did not return a login QR code', 0);
+      if (!data || !data.svg) {
+        qrError = trErr('login.qrMissing');
+        return;
+      }
       qr = data;
       qrLeft = Number(data.expires_in) || 120;
       startQrTimer();
     } catch (err) {
-      qrError = err.message || 'Could not create a login link.';
+      qrError = apiErr(err, 'login.qrError');
     } finally {
       qrBusy = false;
     }
@@ -424,12 +496,15 @@
     backupCodes = null;
     try {
       const data = await api.enroll2fa();
-      if (!data.secret || !data.svg) throw new api.ApiError('Server did not return 2FA data', 0);
+      if (!data.secret || !data.svg) {
+        enrollError = trErr('security.serverMissing');
+        return;
+      }
       enroll = data;
       enrollCode = '';
     } catch (err) {
       if (err.status === 401) return onUnauthorized();
-      enrollError = err.message || 'Enrollment failed.';
+      enrollError = apiErr(err, 'security.enrollFailed');
     } finally {
       enrollBusy = false;
     }
@@ -447,11 +522,11 @@
       enrollCode = '';
     } catch (err) {
       if (err.status === 401 && String(err.message || '').includes('totp')) {
-        enrollError = 'That code is not valid. Check your app and try again.';
+        enrollError = trErr('security.invalidCodeTry');
       } else if (err.status === 401) {
         return onUnauthorized();
       } else {
-        enrollError = err.message || 'Activation failed.';
+        enrollError = apiErr(err, 'security.activateFailed');
       }
     } finally {
       enrollBusy = false;
@@ -471,12 +546,14 @@
     try {
       await api.disable2fa(disableCode.trim());
       disableCode = '';
-      disableNotice = 'Two-factor authentication disabled.';
+      disableNotice = trErr('security.disabled');
+    loadTwofaStatus();
+    loadTwofaStatus();
     } catch (err) {
       if (err.status === 401 && String(err.message || '').includes('totp')) {
-        disableError = 'Invalid authentication code.';
+        disableError = trErr('security.invalidCode');
       } else {
-        disableError = err.message || 'Could not disable 2FA.';
+        disableError = apiErr(err, 'security.disableFailed');
       }
     } finally {
       disableBusy = false;
@@ -493,9 +570,9 @@
       regenCode = '';
     } catch (err) {
       if (err.status === 401 && String(err.message || '').includes('totp')) {
-        regenError = 'Invalid authentication code.';
+        regenError = trErr('security.invalidCode');
       } else {
-        regenError = err.message || 'Could not generate new backup codes.';
+        regenError = apiErr(err, 'security.regenFailed');
       }
     } finally {
       regenBusy = false;
@@ -567,7 +644,7 @@
         pct: 100,
         active: false,
         code,
-        error: code === 0 ? '' : `Job exited with code ${code}`
+        error: code === 0 ? '' : trErr('job.exited', { code })
       });
       closeStream(name);
       loadVaults();
@@ -578,14 +655,14 @@
         const d = parseEvent(ev);
         patchJob(name, {
           active: false,
-          error: d.message ? String(d.message) : 'Job failed'
+          error: d.message ? rawErr(String(d.message)) : trErr('job.failed')
         });
         closeStream(name);
         loadVaults();
       } else {
         patchJob(name, {
           active: false,
-          error: 'Lost connection to the job event stream'
+          error: trErr('job.lostConnection')
         });
         closeStream(name);
         loadVaults();
@@ -635,14 +712,14 @@
     mountBusy = true;
     mountError = '';
     try {
-      const jobId = await api.mountVault(name, passphrase);
+      const jobId = await api.mountVault(name, passphrase, lang === 'zh' ? 'zh-CN' : 'en-US');
       mountTarget = null;
       passphrase = '';
       if (jobId) startJob(name, jobId);
       else await loadVaults();
     } catch (err) {
       if (err.status === 401) return onUnauthorized();
-      mountError = err.message;
+      mountError = apiErr(err, 'mount.failed');
     } finally {
       mountBusy = false;
     }
@@ -655,7 +732,7 @@
       [name]: { pct: 0, done: 0, total: 0, logs: [], error: '', code: null, active: true }
     };
     try {
-      const jobId = await api.umountVault(name);
+      const jobId = await api.umountVault(name, lang === 'zh' ? 'zh-CN' : 'en-US');
       if (jobId) startJob(name, jobId);
       else {
         patchJob(name, { active: false, pct: 100 });
@@ -663,7 +740,7 @@
       }
     } catch (err) {
       if (err.status === 401) return onUnauthorized();
-      patchJob(name, { active: false, error: err.message });
+      patchJob(name, { active: false, error: apiErr(err, 'job.failed') });
     }
   }
 
@@ -673,26 +750,30 @@
 
   // --- formatting ----------------------------------------------------------
 
-  function fmtTime(t) {
+  function fmtTime(t, code) {
+    const locale = code === 'zh' ? 'zh-CN' : 'en-US';
+    const local = (d) => (isNaN(d.getTime()) ? String(t) : d.toLocaleString(locale));
     if (t === null || t === undefined || t === '') return '—';
     if (typeof t === 'number') {
       const d = new Date(t < 1e12 ? t * 1000 : t);
-      return isNaN(d.getTime()) ? String(t) : d.toLocaleString();
+      return local(d);
     }
     const d = new Date(t);
-    return isNaN(d.getTime()) ? String(t) : d.toLocaleString();
+    return local(d);
   }
 
   function depInfo(v) {
-    if (v === true) return { ok: true, text: 'ok' };
-    if (v === false) return { ok: false, text: 'missing' };
+    if (v === true) return { ok: true, text: 'ok', kind: 'ok' };
+    if (v === false) return { ok: false, text: 'missing', kind: 'missing' };
     if (v && typeof v === 'object') {
       const ok = v.ok !== undefined ? v.ok : v.available !== undefined ? v.available : v.found;
-      const text = v.version || v.path || (ok === false ? 'missing' : ok === true ? 'ok' : 'unknown');
-      return { ok: ok !== false, text: String(text) };
+      const detail = v.version || v.path;
+      const kind = detail ? 'value' : ok === false ? 'missing' : ok === true ? 'ok' : 'unknown';
+      const text = detail || (kind === 'missing' ? 'missing' : kind === 'ok' ? 'ok' : 'unknown');
+      return { ok: ok !== false, text: String(text), kind };
     }
-    if (v === null || v === undefined) return { ok: true, text: 'unknown' };
-    return { ok: true, text: String(v) };
+    if (v === null || v === undefined) return { ok: true, text: 'unknown', kind: 'unknown' };
+    return { ok: true, text: String(v), kind: 'value' };
   }
 
   function resultTone(result) {
@@ -707,27 +788,41 @@
 
 {#if !isLoopback}
   <div class="banner" role="status">
-    You are not accessing this UI over loopback. The session cookie may be exposed on the network.
+    {tr('banner.insecure')}
   </div>
 {/if}
 
 {#if checking}
-  <div class="boot">Loading…</div>
+  <div class="boot">{tr('common.loading')}</div>
 {:else if !authed}
   <main class="login-wrap">
     <form class="card login" on:submit|preventDefault={submitLogin}>
-      <h1>gocryptfs-ui</h1>
+      <div class="lang-switch">
+        <button
+          class="btn ghost small"
+          type="button"
+          on:click={toggleLang}
+          title={tr(lang === 'zh' ? 'nav.switchToEnglish' : 'nav.switchToChinese')}
+          aria-label={tr(lang === 'zh' ? 'nav.switchToEnglish' : 'nav.switchToChinese')}
+        >
+          {lang === 'zh' ? tr('nav.langToggleToEn') : tr('nav.langToggleToZh')}
+        </button>
+      </div>
+      <h1>{tr('app.title')}</h1>
 
       {#if !showPasswordTab}
         <p class="muted small-text">
-          Username / password sign-in is disabled because no user exists yet. On the server run
-          <code>gocryptfs-web user add &lt;name&gt;</code> (takes effect immediately), then
-          <button type="button" class="link-btn" on:click={recheckAuth}>check again</button>.
+          {tr('login.disabledHint')}
+          <code>gocryptfs-web user add &lt;name&gt;</code>{tr('login.disabledHintMid')}<button
+            type="button"
+            class="link-btn"
+            on:click={recheckAuth}>{tr('login.recheck')}</button
+          >{tr('login.disabledHintEnd')}
         </p>
       {/if}
 
       {#if showPasswordTab && authStatus.token_auth}
-        <div class="seg" role="tablist" aria-label="Sign-in method">
+        <div class="seg" role="tablist" aria-label={tr('login.methodAria')}>
           <button
             type="button"
             class="seg-btn"
@@ -736,7 +831,7 @@
             aria-selected={loginMode === 'token'}
             on:click={() => switchLoginMode('token')}
           >
-            Token
+            {tr('login.tokenTab')}
           </button>
           <button
             type="button"
@@ -746,25 +841,25 @@
             aria-selected={loginMode === 'password'}
             on:click={() => switchLoginMode('password')}
           >
-            Username &amp; password
+            {tr('login.passwordTab')}
           </button>
         </div>
       {/if}
 
       {#if loginMode === 'token'}
-        <p class="muted">Enter the access token to unlock this console.</p>
-        <label for="token">Access token</label>
+        <p class="muted">{tr('login.tokenHint')}</p>
+        <label for="token">{tr('login.tokenLabel')}</label>
         <input
           id="token"
           type="password"
           bind:value={token}
           autocomplete="current-password"
-          placeholder="session token"
+          placeholder={tr('login.tokenPlaceholder')}
           disabled={loginBusy}
         />
       {:else}
-        <p class="muted">Sign in with your account credentials.</p>
-        <label for="username">Username</label>
+        <p class="muted">{tr('login.passwordHint')}</p>
+        <label for="username">{tr('login.username')}</label>
         <input
           id="username"
           type="text"
@@ -774,7 +869,7 @@
           spellcheck="false"
           disabled={loginBusy}
         />
-        <label for="password">Password</label>
+        <label for="password">{tr('login.password')}</label>
         <input
           id="password"
           type="password"
@@ -783,7 +878,7 @@
           disabled={loginBusy}
         />
         {#if totpRequired}
-          <label for="totp">Authentication code</label>
+          <label for="totp">{tr('login.totpLabel')}</label>
           <input
             id="totp"
             class="totp"
@@ -794,19 +889,16 @@
             autocomplete="one-time-code"
             autocapitalize="none"
             spellcheck="false"
-            placeholder="123456 or backup code"
+            placeholder={tr('login.totpPlaceholder')}
             maxlength="24"
             disabled={loginBusy}
           />
-          <p class="muted small-text">
-            Two-factor authentication is enabled. Enter the 6-digit code from your authenticator
-            app, or one of your backup codes.
-          </p>
+          <p class="muted small-text">{tr('login.totpHint')}</p>
         {/if}
       {/if}
 
       {#if loginError}
-        <p class="error" role="alert">{loginError}</p>
+        <p class="error" role="alert">{errText(loginError, tr)}</p>
       {/if}
 
       <button
@@ -815,21 +907,19 @@
         disabled={loginBusy ||
           (loginMode === 'token' ? !token.trim() : !username.trim() || !password)}
       >
-        {loginBusy ? 'Signing in…' : 'Sign in'}
+        {loginBusy ? tr('login.busy') : tr('login.submit')}
       </button>
 
       {#if authStatus['2fa_available']}
-        <p class="muted small-text center">
-          Lost your device? Use a backup code, or ask the host operator for a one-time login link.
-        </p>
+        <p class="muted small-text center">{tr('login.backupHint')}</p>
       {/if}
     </form>
   </main>
 {:else}
   <header class="topbar">
     <div class="topbar-inner">
-      <div class="brand">gocryptfs-ui</div>
-      <nav class="tabs" aria-label="Pages">
+      <div class="brand">{tr('app.title')}</div>
+      <nav class="tabs" aria-label={tr('nav.pagesAria')}>
         {#each TABS as t}
           <button
             type="button"
@@ -838,50 +928,88 @@
             aria-current={tab === t.id ? 'page' : undefined}
             on:click={() => selectTab(t.id)}
           >
-            {t.label}
+            {tr(t.labelKey)}
           </button>
         {/each}
       </nav>
       <div class="topbar-actions">
         <button
+          class="btn ghost small lang-toggle"
+          type="button"
+          on:click={toggleLang}
+          title={tr(lang === 'zh' ? 'nav.switchToEnglish' : 'nav.switchToChinese')}
+          aria-label={tr(lang === 'zh' ? 'nav.switchToEnglish' : 'nav.switchToChinese')}
+        >
+          {lang === 'zh' ? tr('nav.langToggleToEn') : tr('nav.langToggleToZh')}
+        </button>
+        <button
           class="btn ghost small theme-toggle"
           type="button"
           on:click={cycleTheme}
-          title={`Theme: ${themeLabel(theme)} (click to change)`}
-          aria-label={`Theme: ${themeLabel(theme)}. Click to switch to ${themeLabel(
-            theme === 'auto' ? 'light' : theme === 'light' ? 'dark' : 'auto'
-          )}.`}
+          title={tr('theme.title', { mode: tr('theme.' + theme) })}
+          aria-label={tr('theme.aria', {
+            mode: tr('theme.' + theme),
+            next: tr('theme.' + nextTheme)
+          })}
         >
           <span class="theme-icon" aria-hidden="true">{themeIcon(theme)}</span>
-          <span class="theme-label">{themeLabel(theme)}</span>
+          <span class="theme-label">{tr('theme.' + theme)}</span>
         </button>
-        <button class="btn ghost small" type="button" on:click={openQr} disabled={qrBusy}>
-          {qrBusy ? '…' : '手机登录'}
+        <button
+          class="btn ghost small"
+          type="button"
+          on:click={openQr}
+          disabled={qrBusy}
+          title={tr('login.qrButton')}
+          aria-label={tr('login.qrButton')}
+        >
+          {qrBusy ? '…' : tr('nav.phoneLogin')}
         </button>
-        <button class="btn ghost small" type="button" on:click={doLogout}>Logout</button>
+        <button class="btn ghost small" type="button" on:click={doLogout}>{tr('nav.logout')}</button>
       </div>
     </div>
   </header>
+
+  {#if twofaStatus && !twofaStatus.enabled && !twofaDismissed}
+    <div class="notice twofa-prompt" role="status">
+      <div>
+        <strong>{tr('twofa.promptTitle')}</strong>
+        <span class="muted small-text">
+          {twofaStatus.can_enable ? tr('twofa.promptBody') : tr('twofa.promptBodyToken')}
+        </span>
+      </div>
+      <div class="row-actions">
+        {#if twofaStatus.can_enable}
+          <button class="btn primary" type="button" on:click={() => selectTab('security')}>
+            {tr('twofa.enableNow')}
+          </button>
+        {/if}
+        <button class="btn" type="button" on:click={dismissTwofaPrompt}>
+          {tr('twofa.later')}
+        </button>
+      </div>
+    </div>
+  {/if}
 
   <main class="content">
     {#if tab === 'vaults'}
       <section>
         <div class="section-head">
-          <h2>Vaults</h2>
+          <h2>{tr('vaults.title')}</h2>
           <button class="btn" type="button" on:click={loadVaults} disabled={vaultsLoading}>
-            {vaultsLoading ? 'Refreshing…' : 'Refresh'}
+            {vaultsLoading ? tr('common.refreshing') : tr('common.refresh')}
           </button>
         </div>
 
         {#if vaultsError}
           <div class="notice error" role="alert">
-            <span>{vaultsError}</span>
-            <button class="btn small" type="button" on:click={loadVaults}>Retry</button>
+            <span>{errText(vaultsError, tr)}</span>
+            <button class="btn small" type="button" on:click={loadVaults}>{tr('common.retry')}</button>
           </div>
         {/if}
 
         {#if !vaults.length && !vaultsLoading}
-          <p class="muted empty">No vaults configured.</p>
+          <p class="muted empty">{tr('vaults.empty')}</p>
         {:else}
           <div class="vault-grid">
             {#each vaults as vault (vault.name)}
@@ -890,7 +1018,7 @@
                 <header class="vault-head">
                   <h3>{vault.name}</h3>
                   <span class="badge" class:on={vault.mounted} class:off={!vault.mounted}>
-                    {vault.mounted ? 'mounted' : 'not mounted'}
+                    {vault.mounted ? tr('vaults.mounted') : tr('vaults.notMounted')}
                   </span>
                 </header>
                 <p class="path" title={vault.mountPoint}>{vault.mountPoint || '—'}</p>
@@ -901,7 +1029,7 @@
                     disabled={vault.mounted || isBusy(vault.name)}
                     on:click={() => openMount(vault)}
                   >
-                    Mount
+                    {tr('vaults.mount')}
                   </button>
                   <button
                     class="btn"
@@ -909,7 +1037,7 @@
                     disabled={!vault.mounted || isBusy(vault.name)}
                     on:click={() => doUmount(vault)}
                   >
-                    Umount
+                    {tr('vaults.umount')}
                   </button>
                 </div>
 
@@ -918,6 +1046,7 @@
                     <div
                       class="bar"
                       role="progressbar"
+                      aria-label={tr('job.progress')}
                       aria-valuemin="0"
                       aria-valuemax="100"
                       aria-valuenow={Math.round(job.pct)}
@@ -927,11 +1056,11 @@
                     <div class="job-meta">
                       <span>{Math.round(job.pct)}%</span>
                       {#if job.total > 0}<span>{job.done}/{job.total}</span>{/if}
-                      {#if job.active}<span class="muted">working…</span>{/if}
-                      {#if job.code !== null && !job.error}<span class="ok-text">done</span>{/if}
+                      {#if job.active}<span class="muted">{tr('job.running')}</span>{/if}
+                      {#if job.code !== null && !job.error}<span class="ok-text">{tr('job.done')}</span>{/if}
                     </div>
                     {#if job.error}
-                      <p class="error small-text" role="alert">{job.error}</p>
+                      <p class="error small-text" role="alert">{errText(job.error, tr)}</p>
                     {/if}
                     {#if job.logs.length}
                       <pre class="job-log">{job.logs.join('\n')}</pre>
@@ -948,37 +1077,37 @@
     {#if tab === 'logs'}
       <section>
         <div class="section-head">
-          <h2>Logs</h2>
+          <h2>{tr('logs.title')}</h2>
           <button class="btn" type="button" on:click={loadLogs} disabled={logsLoading}>
-            {logsLoading ? 'Refreshing…' : 'Refresh'}
+            {logsLoading ? tr('common.refreshing') : tr('logs.refresh')}
           </button>
         </div>
 
         {#if logsError}
           <div class="notice error" role="alert">
-            <span>{logsError}</span>
-            <button class="btn small" type="button" on:click={loadLogs}>Retry</button>
+            <span>{errText(logsError, tr)}</span>
+            <button class="btn small" type="button" on:click={loadLogs}>{tr('common.retry')}</button>
           </div>
         {/if}
 
         {#if !logs.length && !logsLoading}
-          <p class="muted empty">No log entries.</p>
+          <p class="muted empty">{tr('logs.empty')}</p>
         {:else}
           <div class="table-wrap">
-            <div class="logs-table" role="table" aria-label="Log entries">
+            <div class="logs-table" role="table" aria-label={tr('logs.titleAria')}>
               <div class="log-row log-head" role="row">
-                <span class="cell when" role="columnheader">Time</span>
-                <span class="cell src" role="columnheader">Src</span>
-                <span class="cell action" role="columnheader">Action</span>
-                <span class="cell target" role="columnheader">Target</span>
-                <span class="cell result" role="columnheader">Result</span>
-                <span class="cell detail" role="columnheader">Detail</span>
+                <span class="cell when" role="columnheader">{tr('logs.time')}</span>
+                <span class="cell src" role="columnheader">{tr('logs.source')}</span>
+                <span class="cell action" role="columnheader">{tr('logs.action')}</span>
+                <span class="cell target" role="columnheader">{tr('logs.target')}</span>
+                <span class="cell result" role="columnheader">{tr('logs.result')}</span>
+                <span class="cell detail" role="columnheader">{tr('logs.detail')}</span>
               </div>
               {#each logs as row, i (i)}
                 {@const tone = resultTone(row.result)}
                 <div class="log-row" role="row">
                   <span class="cell when nowrap" role="cell">
-                    {fmtTime(row.time ?? row.ts ?? row.timestamp)}
+                    {fmtTime(row.time ?? row.ts ?? row.timestamp, lang)}
                   </span>
                   <span class="cell src" role="cell">{row.src ?? row.source ?? '—'}</span>
                   <span class="cell action" role="cell">{row.action ?? '—'}</span>
@@ -1003,27 +1132,27 @@
     {#if tab === 'meta'}
       <section>
         <div class="section-head">
-          <h2>Meta</h2>
+          <h2>{tr('meta.title')}</h2>
           <button class="btn" type="button" on:click={loadMeta} disabled={metaLoading}>
-            {metaLoading ? 'Refreshing…' : 'Refresh'}
+            {metaLoading ? tr('common.refreshing') : tr('common.refresh')}
           </button>
         </div>
 
         {#if metaError}
           <div class="notice error" role="alert">
-            <span>{metaError}</span>
-            <button class="btn small" type="button" on:click={loadMeta}>Retry</button>
+            <span>{errText(metaError, tr)}</span>
+            <button class="btn small" type="button" on:click={loadMeta}>{tr('common.retry')}</button>
           </div>
         {/if}
 
         {#if meta}
           <div class="card">
-            <h3>Version</h3>
+            <h3>{tr('meta.version')}</h3>
             <p class="mono">{meta.version ?? meta.version_string ?? '—'}</p>
           </div>
 
           <div class="card">
-            <h3>Paths</h3>
+            <h3>{tr('meta.paths')}</h3>
             <dl class="kv">
               {#each ['config', 'data', 'state', 'log', 'history'] as key}
                 <dt>{key}</dt>
@@ -1037,19 +1166,25 @@
           </div>
 
           <div class="card">
-            <h3>Dependencies</h3>
+            <h3>{tr('meta.deps')}</h3>
             {#if Object.keys(metaDeps).length}
               <ul class="deps">
                 {#each Object.entries(metaDeps) as [name, value]}
                   {@const info = depInfo(value)}
                   <li>
                     <span class="dep-name">{name}</span>
-                    <span class="badge" class:on={info.ok} class:off={!info.ok}>{info.text}</span>
+                    <span class="badge" class:on={info.ok} class:off={!info.ok}>{info.kind === 'ok'
+                        ? tr('meta.depsOk')
+                        : info.kind === 'missing'
+                          ? tr('meta.depsMissing')
+                          : info.kind === 'unknown'
+                            ? tr('meta.unknown')
+                            : info.text}</span>
                   </li>
                 {/each}
               </ul>
             {:else}
-              <p class="muted">No dependency information reported.</p>
+              <p class="muted">{tr('meta.noDeps')}</p>
             {/if}
           </div>
         {/if}
@@ -1059,51 +1194,61 @@
     {#if tab === 'security'}
       <section>
         <div class="section-head">
-          <h2>Security</h2>
+          <h2>{tr('security.title')}</h2>
           <span class="badge" class:on={!!backupCodes} class:off={!backupCodes}>
-            {backupCodes ? '2FA codes shown' : '2FA'}
+            {backupCodes ? tr('security.codesShown') : tr('security.badge')}
           </span>
         </div>
 
+        {#if twofaStatus}
+          <p class="muted small-text">
+            {twofaStatus.enabled ? tr('twofa.statusOn') : tr('twofa.statusOff')}
+            {#if twofaStatus.enabled && twofaStatus.backup_codes > 0}
+              · {tr('twofa.backupLeft', { n: twofaStatus.backup_codes })}
+            {/if}
+            {#if !twofaStatus.can_enable}
+              · {tr('twofa.promptBodyToken')}
+            {/if}
+            {#if !twofaStatus.enabled}
+              · {tr('twofa.defaultNote')}
+            {/if}
+          </p>
+        {/if}
+
         {#if !authStatus['2fa_available']}
           <div class="notice error" role="status">
-            <span>This server build does not advertise two-factor authentication support.</span>
+            <span>{tr('security.unavailable')}</span>
           </div>
         {/if}
 
         <div class="card">
-          <h3>Two-factor authentication</h3>
-          <p class="muted small-text">
-            Add a second factor to your account. You will need an authenticator app such as
-            Aegis, 1Password, or Google Authenticator.
-          </p>
+          <h3>{tr('security.twoFactor')}</h3>
+          <p class="muted small-text">{tr('security.enrollHint')}</p>
 
           {#if !enroll}
             <div class="row-actions">
               <button class="btn primary" type="button" on:click={startEnroll} disabled={enrollBusy}>
-                {enrollBusy ? 'Preparing…' : 'Set up 2FA'}
+                {enrollBusy ? tr('security.preparing') : tr('security.enroll')}
               </button>
             </div>
           {:else}
             <div class="enroll">
-              <div class="qr-box" aria-label="2FA enrollment QR code">
+              <div class="qr-box" aria-label={tr('security.qrAria')}>
                 {@html enroll.svg}
               </div>
               <div class="enroll-info">
-                <p class="muted small-text">
-                  Scan the QR code, or enter this secret manually:
-                </p>
+                <p class="muted small-text">{tr('security.activateHint')}</p>
                 <div class="copy-row">
-                  <code class="secret">{enroll.secret}</code>
+                  <code class="secret" aria-label={tr('security.secret')}>{enroll.secret}</code>
                   <button
                     class="btn small"
                     type="button"
                     on:click={() => copyValue(enroll.secret, 'secret')}
                   >
-                    {copiedKey === 'secret' ? 'Copied' : 'Copy'}
+                    {copiedKey === 'secret' ? tr('security.copied') : tr('common.copy')}
                   </button>
                 </div>
-                <label for="enroll-code">6-digit code</label>
+                <label for="enroll-code">{tr('security.codeLabel')}</label>
                 <input
                   id="enroll-code"
                   class="totp"
@@ -1116,11 +1261,11 @@
                   disabled={enrollBusy}
                 />
                 {#if enrollError}
-                  <p class="error small-text" role="alert">{enrollError}</p>
+                  <p class="error small-text" role="alert">{errText(enrollError, tr)}</p>
                 {/if}
                 <div class="row-actions">
                   <button class="btn" type="button" on:click={cancelEnroll} disabled={enrollBusy}>
-                    Cancel
+                    {tr('common.cancel')}
                   </button>
                   <button
                     class="btn primary"
@@ -1128,7 +1273,7 @@
                     on:click={activateEnroll}
                     disabled={enrollBusy || enrollCode.trim().length < 6}
                   >
-                    {enrollBusy ? 'Verifying…' : 'Activate'}
+                    {enrollBusy ? tr('security.verifying') : tr('security.activate')}
                   </button>
                 </div>
               </div>
@@ -1138,11 +1283,8 @@
 
         {#if backupCodes}
           <div class="card backup-card">
-            <h3>Backup codes</h3>
-            <p class="warn-text" role="alert">
-              Save these codes now — they are shown only once. Each code can be used once if you
-              lose access to your authenticator.
-            </p>
+            <h3>{tr('security.backupCodes')}</h3>
+            <p class="warn-text" role="alert">{tr('security.backupHint')}</p>
             <ul class="code-list">
               {#each backupCodes as code}
                 <li class="mono">{code}</li>
@@ -1154,22 +1296,22 @@
                 type="button"
                 on:click={() => copyValue(backupCodes.join('\n'), 'codes')}
               >
-                {copiedKey === 'codes' ? 'Copied' : 'Copy all'}
+                {copiedKey === 'codes' ? tr('security.copied') : tr('security.copyAll')}
               </button>
               <button class="btn primary" type="button" on:click={dismissBackupCodes}>
-                I saved them
+                {tr('security.saved')}
               </button>
             </div>
             <p class="muted small-text">
-              {backupOrigin === 'activate' ? '2FA is now enabled.' : 'New backup codes generated.'}
+              {backupOrigin === 'activate' ? tr('security.enabled') : tr('security.generated')}
             </p>
           </div>
         {/if}
 
         <div class="card">
-          <h3>Regenerate backup codes</h3>
-          <p class="muted small-text">Requires a valid 6-digit code. Old codes stop working.</p>
-          <label for="regen-code">6-digit code</label>
+          <h3>{tr('security.regenerate')}</h3>
+          <p class="muted small-text">{tr('security.regenerateHint')}</p>
+          <label for="regen-code">{tr('security.codeLabel')}</label>
           <input
             id="regen-code"
             class="totp"
@@ -1182,7 +1324,7 @@
             disabled={regenBusy}
           />
           {#if regenError}
-            <p class="error small-text" role="alert">{regenError}</p>
+            <p class="error small-text" role="alert">{errText(regenError, tr)}</p>
           {/if}
           <div class="row-actions">
             <button
@@ -1191,17 +1333,15 @@
               on:click={submitRegen}
               disabled={regenBusy || regenCode.trim().length < 6}
             >
-              {regenBusy ? 'Generating…' : 'Generate new codes'}
+              {regenBusy ? tr('security.generating') : tr('security.generate')}
             </button>
           </div>
         </div>
 
         <div class="card danger-card">
-          <h3>Disable two-factor authentication</h3>
-          <p class="muted small-text">
-            Enter a current 6-digit code (or a backup code) to turn 2FA off for this account.
-          </p>
-          <label for="disable-code">Authentication code</label>
+          <h3>{tr('security.disableTitle')}</h3>
+          <p class="muted small-text">{tr('security.disableHint')}</p>
+          <label for="disable-code">{tr('security.disableAuthLabel')}</label>
           <input
             id="disable-code"
             class="totp"
@@ -1214,10 +1354,10 @@
             disabled={disableBusy}
           />
           {#if disableError}
-            <p class="error small-text" role="alert">{disableError}</p>
+            <p class="error small-text" role="alert">{errText(disableError, tr)}</p>
           {/if}
           {#if disableNotice}
-            <p class="ok-text small-text" role="status">{disableNotice}</p>
+            <p class="ok-text small-text" role="status">{errText(disableNotice, tr)}</p>
           {/if}
           <div class="row-actions">
             <button
@@ -1226,7 +1366,7 @@
               on:click={submitDisable}
               disabled={disableBusy || disableCode.trim().length < 6}
             >
-              {disableBusy ? 'Disabling…' : 'Disable 2FA'}
+              {disableBusy ? tr('security.disabling') : tr('security.disable')}
             </button>
           </div>
         </div>
@@ -1244,9 +1384,9 @@
         on:submit|preventDefault={submitMount}
       >
         <div class="sheet-grab" aria-hidden="true"></div>
-        <h2 id="mount-title">Mount {mountTarget.name}</h2>
+        <h2 id="mount-title">{tr('mount.title', { name: mountTarget.name })}</h2>
         <p class="muted mono small-text">{mountTarget.mountPoint}</p>
-        <label for="passphrase">Passphrase</label>
+        <label for="passphrase">{tr('mount.passphrase')}</label>
         <input
           id="passphrase"
           type="password"
@@ -1256,12 +1396,14 @@
           disabled={mountBusy}
         />
         {#if mountError}
-          <p class="error" role="alert">{mountError}</p>
+          <p class="error" role="alert">{errText(mountError, tr)}</p>
         {/if}
         <div class="modal-actions">
-          <button class="btn" type="button" on:click={closeMount} disabled={mountBusy}>Cancel</button>
+          <button class="btn" type="button" on:click={closeMount} disabled={mountBusy}>
+            {tr('mount.cancel')}
+          </button>
           <button class="btn primary" type="submit" disabled={mountBusy || !passphrase}>
-            {mountBusy ? 'Mounting…' : 'Mount'}
+            {mountBusy ? tr('mount.mounting') : tr('mount.confirm')}
           </button>
         </div>
       </form>
@@ -1272,35 +1414,39 @@
     <div class="modal-backdrop" role="presentation" on:click|self={closeQr}>
       <div class="modal card qr-modal" role="dialog" aria-modal="true" aria-labelledby="qr-title">
         <div class="sheet-grab" aria-hidden="true"></div>
-        <h2 id="qr-title">手机登录</h2>
-        <p class="muted small-text">
-          Scan this code with your phone, or open the link on a device on the same network.
-        </p>
+        <h2 id="qr-title">{tr('login.qrTitle')}</h2>
+        <p class="muted small-text">{tr('login.qrHint')}</p>
         {#if qr}
-          <div class="qr-box" aria-label="One-time login QR code">
+          <div class="qr-box" aria-label={tr('login.qrAria')}>
             {@html qr.svg}
           </div>
           <div class="copy-row">
-            <input class="url-input mono" type="text" readonly value={qr.url} aria-label="Login URL" />
+            <input
+              class="url-input mono"
+              type="text"
+              readonly
+              value={qr.url}
+              aria-label={tr('login.qrUrlAria')}
+            />
             <button class="btn small" type="button" on:click={copyQrUrl}>
-              {qrCopied ? 'Copied' : 'Copy'}
+              {qrCopied ? tr('qr.copied') : tr('qr.copy')}
             </button>
           </div>
         {:else if qrBusy}
-          <p class="muted small-text">Generating a one-time link…</p>
+          <p class="muted small-text">{tr('qr.generating')}</p>
         {/if}
         {#if qr && qrLeft > 0}
-          <p class="muted small-text">Link expires in {qrLeft}s · single use.</p>
+          <p class="muted small-text">{tr('qr.expires', { seconds: qrLeft })}</p>
         {:else if qr}
-          <p class="error small-text" role="status">This link has expired.</p>
+          <p class="error small-text" role="status">{tr('qr.expired')}</p>
         {/if}
         {#if qrError}
-          <p class="error small-text" role="alert">{qrError}</p>
+          <p class="error small-text" role="alert">{errText(qrError, tr)}</p>
         {/if}
         <div class="modal-actions">
-          <button class="btn" type="button" on:click={closeQr}>Close</button>
+          <button class="btn" type="button" on:click={closeQr}>{tr('common.close')}</button>
           <button class="btn primary" type="button" on:click={openQr} disabled={qrBusy}>
-            {qrBusy ? 'Creating…' : qrLeft > 0 ? 'New link' : 'Create new link'}
+            {qrBusy ? tr('qr.creating') : qrLeft > 0 ? tr('qr.newLink') : tr('qr.createLink')}
           </button>
         </div>
       </div>

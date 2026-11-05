@@ -780,6 +780,35 @@ async fn twofa_disable(
     StatusCode::NO_CONTENT.into_response()
 }
 
+/// 当前会话的 2FA 状态：用于「登录后未启用 2FA 时提示启用」。
+/// token 会话无法绑定 2FA（2FA 属于用户名密码账户），返回 can_enable=false。
+async fn twofa_status(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let username = match resolve_session_user(&state, &headers) {
+        Ok(u) => u,
+        Err(_) => {
+            return Json(json!({
+                "user": null,
+                "enabled": false,
+                "can_enable": false,
+                "backup_codes": 0,
+            }))
+            .into_response();
+        }
+    };
+    let users = state.users.lock().unwrap();
+    let (enabled, backup_codes) = match users.find(&username) {
+        Some(u) => (u.totp_enabled, u.backup_code_hashes.len()),
+        None => (false, 0),
+    };
+    Json(json!({
+        "user": username,
+        "enabled": enabled,
+        "can_enable": true,
+        "backup_codes": backup_codes,
+    }))
+    .into_response()
+}
+
 async fn twofa_backup_codes(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -904,12 +933,27 @@ async fn vaults(State(state): State<AppState>) -> Response {
 struct MountRequest {
     #[serde(default)]
     passphrase: String,
+    /// 可选的界面语言（zh-CN / en-US），用于本地化任务日志。
+    #[serde(default)]
+    lang: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct UmountRequest {
     #[serde(default)]
     force: bool,
+    /// 可选的界面语言（zh-CN / en-US），用于本地化任务日志。
+    #[serde(default)]
+    lang: Option<String>,
+}
+
+/// 只透传 CLI 支持的两种语言代码；其他值一律忽略（CLI 会回落到系统语言）。
+fn normalize_lang(lang: Option<&str>) -> Option<&'static str> {
+    match lang {
+        Some("zh-CN") => Some("zh-CN"),
+        Some("en-US") => Some("en-US"),
+        _ => None,
+    }
 }
 
 #[allow(clippy::result_large_err)]
@@ -933,7 +977,8 @@ async fn mount_vault(
     if let Err(resp) = find_vault(&state, &name) {
         return resp;
     }
-    match spawn_job(&state, "mount", &name, Some(body.passphrase), false) {
+    let lang = normalize_lang(body.lang.as_deref());
+    match spawn_job(&state, "mount", &name, Some(body.passphrase), false, lang) {
         Ok(id) => (StatusCode::ACCEPTED, Json(json!({ "id": id }))).into_response(),
         Err(e) => vault_error(StatusCode::INTERNAL_SERVER_ERROR, e),
     }
@@ -947,7 +992,8 @@ async fn umount_vault(
     if let Err(resp) = find_vault(&state, &name) {
         return resp;
     }
-    match spawn_job(&state, "umount", &name, None, body.force) {
+    let lang = normalize_lang(body.lang.as_deref());
+    match spawn_job(&state, "umount", &name, None, body.force, lang) {
         Ok(id) => (StatusCode::ACCEPTED, Json(json!({ "id": id }))).into_response(),
         Err(e) => vault_error(StatusCode::INTERNAL_SERVER_ERROR, e),
     }
@@ -964,11 +1010,16 @@ fn spawn_job(
     target: &str,
     passphrase: Option<String>,
     force: bool,
+    lang: Option<&str>,
 ) -> Result<u64, String> {
     let id = state.next_job_id.fetch_add(1, Ordering::SeqCst);
     let (tx, _rx) = broadcast::channel(256);
 
     let mut cmd = core::backend::cli_command(&core::paths::cli_path());
+    // 全局参数必须位于子命令之前：gocryptfs-cli [-l <lang>] <command> ...
+    if let Some(lang) = lang {
+        cmd.arg("-l").arg(lang);
+    }
     cmd.arg(kind).arg(target);
     if force {
         cmd.arg("--force");
@@ -1276,6 +1327,7 @@ pub fn app(state: AppState) -> Router {
         .route("/api/2fa/activate", post(twofa_activate))
         .route("/api/2fa/disable", post(twofa_disable))
         .route("/api/2fa/backup-codes", post(twofa_backup_codes))
+        .route("/api/2fa/status", get(twofa_status))
         .route("/api/meta", get(meta))
         .route("/api/vaults", get(vaults))
         .route("/api/vaults/:name/mount", post(mount_vault))
@@ -1855,5 +1907,19 @@ pub fn run() {
     if let Err(e) = result {
         eprintln!("error: {e}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod lang_tests {
+    use super::normalize_lang;
+
+    #[test]
+    fn normalize_lang_only_passes_supported_codes() {
+        assert_eq!(normalize_lang(Some("zh-CN")), Some("zh-CN"));
+        assert_eq!(normalize_lang(Some("en-US")), Some("en-US"));
+        assert_eq!(normalize_lang(Some("zh")), None);
+        assert_eq!(normalize_lang(Some("fr-FR")), None);
+        assert_eq!(normalize_lang(None), None);
     }
 }

@@ -2,48 +2,22 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/)。
 
-## [0.7.0] - 2026-11-05
-
-**安装 / Install** — 用户级装到 `~/.local/bin`（默认，无需 sudo），系统级加 `--system` 装到 `/usr/local/bin`：
-
-```bash
-curl -LsSf https://github.com/lockejet/gocryptfs-ui/releases/latest/download/gocryptfs-tui-install.sh | sh
-curl -LsSf https://github.com/lockejet/gocryptfs-ui/releases/latest/download/gocryptfs-tui-install.sh | sh -s -- --system
-```
-
-预编译包（x86_64/aarch64 glibc、x86_64 musl）、`source.tar.gz` 与 sha256 校验和见下方 Assets；git clone 与源码编译两种方式见 [README](https://github.com/lockejet/gocryptfs-ui#installation)。
+## [Unreleased]
 
 ### Features
-- **新增 Web UI（`gocryptfs-web`）**：浏览器管理加密卷——卷列表与实时挂载状态、挂载/卸载
-  （口令弹窗 + SSE 实时进度）、统一 JSONL 日志、生效路径/依赖查看；默认仅监听 `127.0.0.1:30032`
-  （端口约定：反代 44332 → 本机 30032）
-- 主题：亮 / 暗 / 跟随系统三态切换（持久化、防闪烁）；手机端自适应布局（卡片化、底部抽屉、44px 触控）
-- 认证：一次性 token（SHA-256 哈希存储，支持多 token / 标签 / 过期）、用户名+密码
-  （Argon2id、失败限流与锁定）、可选 TOTP 二次验证（含 8 个一次性备份码）、
-  终端二维码 / 一次性链接扫码登录；`gocryptfs-web token|user` 管理命令，改动即时生效
-- 新增 `make web-build`（Svelte + Vite，构建产物内嵌进二进制，CI 无需 Node）
-- systemd 用户单元 `contrib/systemd/gocryptfs-web.service`（**刻意不带 mount-namespace 沙箱**：
-  gocryptfs 挂载需在 host 命名空间，`fusermount` 需 setuid；已写入注释说明）
+- **Web UI 支持中英文切换**：全部界面文案 i18n 化（163 个键，中英目录自动校验一致性），
+  默认跟随浏览器语言、选择持久化；顶栏与登录页均有语言切换按钮；挂载/卸载任务的
+  CLI 日志也会按界面语言本地化（`-l` 传给后端）
+- **2FA 默认关闭**：登录后若当前账户未启用两步验证，界面显示提示（可「立即启用」跳到安全页
+  或「稍后」），安全页显示启用状态与剩余备份码；token 登录且未配置用户时提示可用方式
+
+### Bug Fixes
+- 修复**英文界面混入中文**的问题（`手机登录` 等硬编码中文），改为统一走 i18n 词表
+
+## [0.7.0] - 2026-11-05
 
 ### Documentation
-- README（中英）新增「Web UI」章节（启动、登录方式、凭证管理、反代示例、systemd）；
-  SECURITY（中英）新增「Web UI 威胁模型」
-
-### Testing
-- `test-batch1` 新增 3 项目录迁移用例；`test-install` 路径断言更新；`test-i18n` 帮助文案同步
-
-### 变更
-- **目录名统一为 `gocryptfs-ui`**：配置/数据/状态目录由 `gocryptfs-tui` 改为
-  `gocryptfs-ui`（`~/.config/gocryptfs-ui`、`~/.local/share/gocryptfs-ui`、
-  `~/.local/state/gocryptfs-ui`），安装目录由 `<prefix>/lib/gocryptfs-tui` 改为
-  `<prefix>/lib/gocryptfs-ui`；**命令名不变**（`gocryptfs-tui` / `gocryptfs-cli` / `gocryptfs-web`）
-- **旧目录自动迁移**：首次启动（TUI / CLI / Web 任一端）把旧的 `gocryptfs-tui` 目录整体搬到新位置，
-  仅在新目录不存在时执行；旧安装的 `<prefix>/lib/gocryptfs-tui` 在安装/卸载时清理
-- 文档（中英 README / SECURITY）同步新路径与升级说明；shell 帮助、systemd 单元同步
-- 仓库更名为 **`gocryptfs-ui`**（原 `gocryptfs-tui`），统一承载三种前端：
-  sh 后端（`gocryptfs-cli`）、TUI（`gocryptfs-tui`）、Web UI（`gocryptfs-web`，开发中）；
-  旧仓库地址由 GitHub 自动 301 跳转，**命令名与配置/数据/状态目录名保持不变**（`gocryptfs-tui`），
-  已安装用户无需任何迁移
+- 更新 CHANGELOG
 
 ## [0.6.1] - 2026-10-31
 

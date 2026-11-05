@@ -283,6 +283,18 @@ pre {
   margin-left: auto;
 }
 
+/* Language switcher (header + login card) */
+.lang-switch {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: -4px;
+}
+
+.lang-toggle {
+  min-width: 48px;
+  justify-content: center;
+}
+
 .theme-toggle {
   display: inline-flex;
   align-items: center;
@@ -586,6 +598,13 @@ input.url-input {
   border-radius: 8px;
   margin-bottom: 16px;
   font-size: 14px;
+}
+
+.twofa-prompt .row-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
 }
 
 .notice.error {
