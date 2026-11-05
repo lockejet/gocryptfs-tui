@@ -47,27 +47,27 @@ trap 'rm -rf "$TMP"' EXIT
 P1="$TMP/user"
 sh "$INSTALL" --prefix "$P1" --no-build --no-deps-check >/dev/null 2>&1
 check "用户级安装: TUI 可执行" "yes" "$(exists "$P1/bin/gocryptfs-tui")"
-check "用户级安装: 独立后端存在" "yes" "$(exists "$P1/lib/gocryptfs-tui/gocryptfs-cli")"
-check "用户级安装: VERSION 存在" "yes" "$(exists "$P1/lib/gocryptfs-tui/VERSION")"
+check "用户级安装: 独立后端存在" "yes" "$(exists "$P1/lib/gocryptfs-ui/gocryptfs-cli")"
+check "用户级安装: VERSION 存在" "yes" "$(exists "$P1/lib/gocryptfs-ui/VERSION")"
 check "用户级安装: 默认不链接 CLI" "no" "$(exists "$P1/bin/gocryptfs-cli")"
 check "用户级安装: Web 二进制存在" "yes" "$(exists "$P1/bin/gocryptfs-web")"
-check "安装清单存在" "yes" "$(exists "$P1/lib/gocryptfs-tui/INSTALLED.json")"
-check "文件清单存在" "yes" "$(exists "$P1/lib/gocryptfs-tui/INSTALLED.files")"
+check "安装清单存在" "yes" "$(exists "$P1/lib/gocryptfs-ui/INSTALLED.json")"
+check "文件清单存在" "yes" "$(exists "$P1/lib/gocryptfs-ui/INSTALLED.files")"
 check "清单含 TUI 路径" "yes" \
-    "$(grep -qx "$P1/bin/gocryptfs-tui" "$P1/lib/gocryptfs-tui/INSTALLED.files" && echo yes || echo no)"
+    "$(grep -qx "$P1/bin/gocryptfs-tui" "$P1/lib/gocryptfs-ui/INSTALLED.files" && echo yes || echo no)"
 check "清单 source 为 local" "yes" \
-    "$(grep -q '"source": "local:' "$P1/lib/gocryptfs-tui/INSTALLED.json" && echo yes || echo no)"
+    "$(grep -q '"source": "local:' "$P1/lib/gocryptfs-ui/INSTALLED.json" && echo yes || echo no)"
 check "清单含 Web 路径" "yes" \
-    "$(grep -qx "$P1/bin/gocryptfs-web" "$P1/lib/gocryptfs-tui/INSTALLED.files" && echo yes || echo no)"
+    "$(grep -qx "$P1/bin/gocryptfs-web" "$P1/lib/gocryptfs-ui/INSTALLED.files" && echo yes || echo no)"
 
 # ---- 2. 系统级语义：--system 会链接 CLI（用 --prefix 覆盖落点以便在沙箱测试）----
 P2="$TMP/system"
 sh "$INSTALL" --system --prefix "$P2" --no-build --no-deps-check >/dev/null 2>&1
 check "--system: 链接 gocryptfs-cli" "yes" "$(exists "$P2/bin/gocryptfs-cli")"
 check "--system: 链接指向本次安装" "yes" \
-    "$([ "$(readlink "$P2/bin/gocryptfs-cli")" = "$P2/lib/gocryptfs-tui/gocryptfs-cli" ] && echo yes || echo no)"
+    "$([ "$(readlink "$P2/bin/gocryptfs-cli")" = "$P2/lib/gocryptfs-ui/gocryptfs-cli" ] && echo yes || echo no)"
 check "--system: 清单收录链接" "yes" \
-    "$(grep -qx "$P2/bin/gocryptfs-cli" "$P2/lib/gocryptfs-tui/INSTALLED.files" && echo yes || echo no)"
+    "$(grep -qx "$P2/bin/gocryptfs-cli" "$P2/lib/gocryptfs-ui/INSTALLED.files" && echo yes || echo no)"
 
 # --no-link-cli 能覆盖 --system
 P3="$TMP/nolink"
@@ -85,7 +85,7 @@ echo keep > "$P1/bin/unrelated-tool"
 echo keep > "$P1/lib/unrelated-file"
 sh "$INSTALL" --uninstall --prefix "$P1" >/dev/null 2>&1
 check "卸载: TUI 已删除" "no" "$(exists "$P1/bin/gocryptfs-tui")"
-check "卸载: 后端目录已删除" "no" "$(exists "$P1/lib/gocryptfs-tui")"
+check "卸载: 后端目录已删除" "no" "$(exists "$P1/lib/gocryptfs-ui")"
 check "卸载: Web 已删除" "no" "$(exists "$P1/bin/gocryptfs-web")"
 check "卸载: 无关文件保留 (bin)" "yes" "$(exists "$P1/bin/unrelated-tool")"
 check "卸载: 无关文件保留 (lib)" "yes" "$(exists "$P1/lib/unrelated-file")"
@@ -93,7 +93,7 @@ check "卸载: 无关文件保留 (lib)" "yes" "$(exists "$P1/lib/unrelated-file
 # 有清单时也不应误删前缀之外的路径
 OUTSIDE="$TMP/outside.txt"
 echo keep > "$OUTSIDE"
-printf '%s\n' "$OUTSIDE" >> "$P2/lib/gocryptfs-tui/INSTALLED.files"
+printf '%s\n' "$OUTSIDE" >> "$P2/lib/gocryptfs-ui/INSTALLED.files"
 sh "$INSTALL" --uninstall --prefix "$P2" >/dev/null 2>&1
 check "卸载: 拒绝删除前缀外路径" "yes" "$(exists "$OUTSIDE")"
 
@@ -109,7 +109,7 @@ check "install.sh 通过 sh 语法检查" "0" "$v"
 P4="$TMP/piped"
 cat "$INSTALL" | sh -s -- --prefix "$P4" --no-build --no-deps-check >/dev/null 2>&1
 check "管道执行: TUI 已安装" "yes" "$(exists "$P4/bin/gocryptfs-tui")"
-check "管道执行: 清单已写" "yes" "$(exists "$P4/lib/gocryptfs-tui/INSTALLED.json")"
+check "管道执行: 清单已写" "yes" "$(exists "$P4/lib/gocryptfs-ui/INSTALLED.json")"
 # 管道执行时不应把 $0（=sh）当成脚本路径来提示
 out="$(cat "$INSTALL" | sh -s -- --prefix "$P4" --no-build --no-deps-check 2>&1 | tail -3)"
 case "$out" in *"gocryptfs-ui-install.sh"*) v=1 ;; *) v=0 ;; esac
@@ -192,7 +192,7 @@ check "Release 模式: sha256 校验通过" "yes" \
     "$(printf '%s' "$out" | grep -q 'sha256 verified' && echo yes || echo no)"
 check "Release 模式: TUI 已安装" "yes" "$(exists "$P6/bin/gocryptfs-tui")"
 check "Release 模式: Web 已安装" "yes" "$(exists "$P6/bin/gocryptfs-web")"
-check "Release 模式: 独立后端已安装" "yes" "$(exists "$P6/lib/gocryptfs-tui/gocryptfs-cli")"
+check "Release 模式: 独立后端已安装" "yes" "$(exists "$P6/lib/gocryptfs-ui/gocryptfs-cli")"
 
 # 旧资产前缀回退：只有 gocryptfs-tui-*.tar.xz 时也能装
 DIST_OLD="$TMP/distrib-old"

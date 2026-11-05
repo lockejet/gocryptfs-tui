@@ -10,8 +10,8 @@ use gocryptfs_ui_core::vaults::{HistoryEntry, Vault};
 use gocryptfs_ui_core::{backend, deps, i18n, logger};
 use gocryptfs_ui_core::{config, paths, protocol, vaults};
 use gocryptfs_ui_core::{
-    short_version, version_line, version_string, APP_BUILD_TIME, APP_COMMIT, APP_NAME, APP_VERSION,
-    CLI_NAME,
+    short_version, version_line, version_string, APP_BUILD_TIME, APP_COMMIT, APP_VERSION, CLI_NAME,
+    TUI_NAME,
 };
 
 use crossterm::{
@@ -492,7 +492,7 @@ impl App {
             last_ctrl_d: None,
             ctrl_d_count: 0,
         };
-        app.add_output(t!("output.started", APP_NAME, short_version()));
+        app.add_output(t!("output.started", TUI_NAME, short_version()));
         // 打印解析后的实际路径：便于发现调用到了旧的已安装后端
         app.add_output(format!(
             "{}{}",
@@ -550,7 +550,7 @@ impl App {
 
         app.logger.log(
             LogKind::Operation,
-            LogEntry::new("tui.start", APP_NAME).detail(short_version()),
+            LogEntry::new("tui.start", TUI_NAME).detail(short_version()),
         );
 
         app
@@ -1454,7 +1454,7 @@ impl App {
         // 导出内容随当前界面语言本地化，占位符为具名形式
         tn!(
             "help.export_markdown",
-            "app" => APP_NAME,
+            "app" => TUI_NAME,
             "version" => APP_VERSION,
             "commit" => APP_COMMIT,
             "build" => APP_BUILD_TIME,
@@ -3079,7 +3079,7 @@ fn render_help_overlay(f: &mut Frame, area: Rect, app: &App) {
             t!("help.section_version"),
             Style::default().fg(Color::Magenta),
         )),
-        Line::from(format!("  {} {}", APP_NAME, APP_VERSION)),
+        Line::from(format!("  {} {}", TUI_NAME, APP_VERSION)),
         Line::from(t!("help.commit", APP_COMMIT)),
         Line::from(t!("help.build", APP_BUILD_TIME)),
         Line::from(t!("help.repo", repo_url)),
@@ -3644,11 +3644,11 @@ fn print_help(
     let editor = std::env::var("EDITOR").unwrap_or_else(|_| "nano".to_string());
     let current = |v: String| t!("clihelp.current", v);
 
-    println!("{} {}", APP_NAME, version_string());
+    println!("{} {}", TUI_NAME, version_string());
     println!();
     // 顶部用法与选项
     println!("{}", t!("clihelp.usage"));
-    println!("    {} [OPTIONS]", APP_NAME);
+    println!("    {} [OPTIONS]", TUI_NAME);
     println!();
     println!("{}", t!("clihelp.options"));
     println!("{}", t!("clihelp.opt_config"));
@@ -3677,7 +3677,7 @@ fn print_help(
 }
 
 fn print_version() {
-    println!("{} {}", APP_NAME, version_string());
+    println!("{} {}", TUI_NAME, version_string());
 }
 
 // ---------- 主入口 ----------
@@ -3691,6 +3691,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let data_overridden =
         outcome.opts.data_dir.is_some() || std::env::var_os("GOCRYPTFS_DATA_DIR").is_some();
     let state_dir = paths::resolve_state_dir(&data_dir, data_overridden);
+    let config = paths::resolve_config(outcome.opts.config.clone());
+
+    // 目录改名（0.7）：把旧的 gocryptfs-tui 配置/数据/状态目录搬到 gocryptfs-ui
+    paths::migrate_legacy_dirs(&config, &data_dir, &state_dir);
 
     // 发行包不含 Shell 后端：运行 TUI 前先把内嵌副本释放到数据目录
     // （--help/--version 不写盘，只探测已释放的副本，保持只读）
@@ -3702,7 +3706,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         backend::peek_embedded(&data_dir);
     }
 
-    let config = paths::resolve_config(outcome.opts.config.clone());
     let log_file = state_dir.join("app.log.jsonl");
     let history_file = state_dir.join("history.jsonl");
     let help_file = data_dir.join("HELP.md");
@@ -3713,7 +3716,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(err) = &outcome.error {
         if !matches!(outcome.action, cli::Action::Help | cli::Action::Version) {
             eprintln!("{}", t!("cli.error.prefix", err.render()));
-            eprintln!("{}", t!("cli.error.usage_hint", APP_NAME));
+            eprintln!("{}", t!("cli.error.usage_hint", TUI_NAME));
             std::process::exit(2);
         }
     }
@@ -3805,7 +3808,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     app.logger.log(
         LogKind::Operation,
-        LogEntry::new("tui.quit", APP_NAME).result("success"),
+        LogEntry::new("tui.quit", TUI_NAME).result("success"),
     );
 
     disable_raw_mode()?;

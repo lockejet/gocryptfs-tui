@@ -11,7 +11,7 @@
 | **Web UI** | `gocryptfs-web` | 浏览器界面（开发中） |
 
 三个前端都是同一套 Shell 后端的薄客户端，因此行为完全一致、可分别独立使用；
-配置/数据/状态目录沿用历史命名 `gocryptfs-tui`（兼容）。
+配置/数据/状态目录统一为 `gocryptfs-ui`（从历史命名 `gocryptfs-tui` 首次启动自动迁移）。
 
 ---
 
@@ -97,9 +97,9 @@ gocryptfs-cli --check-deps
 
 | 模式 | 适合 | 命令 | 需要 |
 |---|---|---|---|
-| ① **懒人** | 只想装上 | `curl -LsSf <release>/gocryptfs-tui-install.sh \| sh -s -- --user`（或 `--system`） | `curl` + POSIX sh |
-| ② **git clone** | 想留脚本 / 可重复安装，不想装 Rust | `git clone … && cd gocryptfs-tui && ./install.sh --from-release --user` | `git` + `curl` |
-| ③ **手动（源码）** | 自己编译 / 改代码 | `git clone … && cd gocryptfs-tui && make build && ./install.sh --local --user` | `git` + **cargo** |
+| ① **懒人** | 只想装上 | `curl -LsSf <release>/gocryptfs-ui-install.sh \| sh -s -- --user`（或 `--system`） | `curl` + POSIX sh |
+| ② **git clone** | 想留脚本 / 可重复安装，不想装 Rust | `git clone … && cd gocryptfs-ui && ./install.sh --from-release --user` | `git` + `curl` |
+| ③ **手动（源码）** | 自己编译 / 改代码 | `git clone … && cd gocryptfs-ui && make build && ./install.sh --local --user` | `git` + **cargo** |
 
 落点（三种模式一致）：
 
@@ -107,9 +107,9 @@ gocryptfs-cli --check-deps
 |---|---|---|
 | `--user`（默认） | `~/.local` | 无需 sudo |
 | `--system` | `/usr/local` | 按需 sudo，并默认把 `gocryptfs-cli` 链接到 `/usr/local/bin` |
-| `--prefix DIR` | 自定义 | 例如 `/opt/gocryptfs-tui` |
+| `--prefix DIR` | 自定义 | 例如 `/opt/gocryptfs-ui` |
 
-三种模式都会安装 `<prefix>/bin/gocryptfs-tui` 与 `<prefix>/lib/gocryptfs-tui/`
+三种模式都会安装 `<prefix>/bin/gocryptfs-tui` 与 `<prefix>/lib/gocryptfs-ui/`
 （独立 Shell 后端 + `VERSION`），并写安装清单；都**不修改 shell profile**，只打印需要执行的
 `export PATH=…`；配置与数据目录遵循 XDG（见下），与安装方式无关。
 
@@ -117,14 +117,14 @@ gocryptfs-cli --check-deps
 
 ```bash
 # 用户级 → ~/.local/bin（默认，无需 sudo）
-curl -LsSf https://github.com/lockejet/gocryptfs-ui/releases/latest/download/gocryptfs-tui-install.sh | sh
+curl -LsSf https://github.com/lockejet/gocryptfs-ui/releases/latest/download/gocryptfs-ui-install.sh | sh
 
 # 系统级 → /usr/local/bin（按需 sudo，并链接独立 CLI）
-curl -LsSf https://github.com/lockejet/gocryptfs-ui/releases/latest/download/gocryptfs-tui-install.sh \
+curl -LsSf https://github.com/lockejet/gocryptfs-ui/releases/latest/download/gocryptfs-ui-install.sh \
   | sh -s -- --system
 
 # 指定版本
-curl -LsSf .../gocryptfs-tui-install.sh | sh -s -- --user --version v0.5.0
+curl -LsSf .../gocryptfs-ui-install.sh | sh -s -- --user --version v0.5.0
 ```
 
 脚本会：判定架构/libc → 下载对应 `tar.xz` 并**校验 sha256** → 从同一 Release 的
@@ -132,14 +132,14 @@ curl -LsSf .../gocryptfs-tui-install.sh | sh -s -- --user --version v0.5.0
 → 写安装清单（`INSTALLED.json` / `INSTALLED.files`）。
 
 > **离线 / 内网**：直接在 [Releases](https://github.com/lockejet/gocryptfs-ui/releases)
-> 下载 `gocryptfs-tui-<target>.tar.xz`，解压后把 `gocryptfs-tui` 放到 `~/.local/bin`
+> 下载 `gocryptfs-ui-<target>.tar.xz`，解压后把 `gocryptfs-tui` 放到 `~/.local/bin`
 > 即可（内嵌后端会在首次运行时释放到数据目录）。
 
 ### ② git clone 模式（不需要 cargo）
 
 ```bash
 git clone https://github.com/lockejet/gocryptfs-ui.git
-cd gocryptfs-tui
+cd gocryptfs-ui
 ./install.sh --from-release            # 默认取当前 checkout 的 tag；装到 ~/.local
 ./install.sh --from-release --system   # 装到 /usr/local
 ```
@@ -151,7 +151,7 @@ cd gocryptfs-tui
 
 ```bash
 git clone https://github.com/lockejet/gocryptfs-ui.git
-cd gocryptfs-tui
+cd gocryptfs-ui
 make build                             # 或 cargo build --release
 ./install.sh --local                   # 装到 ~/.local
 ./install.sh --local --system          # 装到 /usr/local
@@ -180,23 +180,23 @@ gocryptfs-tui --print-paths     # 排障：一次看清实际使用的全部路�
 ```
 
 > **独立 CLI 的规范位置**：TUI 首次运行会把内嵌后端释放到
-> `${XDG_DATA_HOME:-~/.local/share}/gocryptfs-tui/backend/gocryptfs-cli`，
+> `${XDG_DATA_HOME:-~/.local/share}/gocryptfs-ui/backend/gocryptfs-cli`，
 > 三种模式一致。想直接在命令行用，可自行软链一次：
 > ```bash
-> ln -sf "${XDG_DATA_HOME:-$HOME/.local/share}/gocryptfs-tui/backend/gocryptfs-cli" \
+> ln -sf "${XDG_DATA_HOME:-$HOME/.local/share}/gocryptfs-ui/backend/gocryptfs-cli" \
 >        "${XDG_BIN_HOME:-$HOME/.local/bin}/gocryptfs-cli"
 > ```
-> `--system` 会自动把 `<prefix>/lib/gocryptfs-tui/gocryptfs-cli` 链接到 `/usr/local/bin`。
+> `--system` 会自动把 `<prefix>/lib/gocryptfs-ui/gocryptfs-cli` 链接到 `/usr/local/bin`。
 
 ### 升级
 
 TUI 与 Shell 后端（`gocryptfs-cli` + `lib/*.sh`）必须**成套更新**，否则可能出现
 「界面已是英文、输出区仍是中文」这类不一致。内嵌后端随二进制一起更新
-（释放目录 `${XDG_DATA_HOME:-~/.local/share}/gocryptfs-tui/backend/` 内容变化时才重写）。
+（释放目录 `${XDG_DATA_HOME:-~/.local/share}/gocryptfs-ui/backend/` 内容变化时才重写）。
 
 ```bash
 # ① 懒人：重跑同一条命令
-curl -LsSf .../gocryptfs-tui-install.sh | sh -s -- --user
+curl -LsSf .../gocryptfs-ui-install.sh | sh -s -- --user
 
 # ② clone：git pull 后重跑
 git pull && ./install.sh --from-release --user
@@ -212,25 +212,25 @@ git pull && make build && ./install.sh --local --user
 
 ```bash
 # ① 懒人 / ② clone / ③ 手动 都按安装清单精确卸载
-curl -LsSf .../gocryptfs-tui-install.sh | sh -s -- --uninstall --user
-curl -LsSf .../gocryptfs-tui-install.sh | sh -s -- --uninstall --system
+curl -LsSf .../gocryptfs-ui-install.sh | sh -s -- --uninstall --user
+curl -LsSf .../gocryptfs-ui-install.sh | sh -s -- --uninstall --system
 ./install.sh --uninstall --user            # 本地已有脚本时
 ./install.sh --uninstall --system
 
 # 便捷封装
 make uninstall                             # 等价 --user
 make uninstall-system                      # 等价 --system
-make uninstall PREFIX=/opt/gocryptfs-tui   # 指定前缀
+make uninstall PREFIX=/opt/gocryptfs-ui   # 指定前缀
 ```
 
-> 卸载**不删**配置、数据与状态：配置 `${XDG_CONFIG_HOME:-~/.config}/gocryptfs-tui/`、
-> 数据 `${XDG_DATA_HOME:-~/.local/share}/gocryptfs-tui/`（含 HELP.md、内嵌释放的后端）、
-> 状态 `${XDG_STATE_HOME:-~/.local/state}/gocryptfs-tui/`（含日志、历史及轮转文件）。
+> 卸载**不删**配置、数据与状态：配置 `${XDG_CONFIG_HOME:-~/.config}/gocryptfs-ui/`、
+> 数据 `${XDG_DATA_HOME:-~/.local/share}/gocryptfs-ui/`（含 HELP.md、内嵌释放的后端）、
+> 状态 `${XDG_STATE_HOME:-~/.local/state}/gocryptfs-ui/`（含日志、历史及轮转文件）。
 > 需要彻底清理时自行删除这三个目录。
 >
-> `install.sh --uninstall` 读 `<prefix>/lib/gocryptfs-tui/INSTALLED.files` 逐条删除，
+> `install.sh --uninstall` 读 `<prefix>/lib/gocryptfs-ui/INSTALLED.files` 逐条删除，
 > 只允许删前缀内的路径；`make uninstall` 删除 `$PREFIX/bin/gocryptfs-tui`、
-> `$PREFIX/bin/gocryptfs-cli` 与 `$PREFIX/lib/gocryptfs-tui/`。
+> `$PREFIX/bin/gocryptfs-cli` 与 `$PREFIX/lib/gocryptfs-ui/`。
 >
 > 0.4.x 及更早用 cargo-dist 的 `-installer.sh` 装过的（`~/.cargo/bin` 或 `~/.local/bin`）：
 > `rm -f ~/.local/bin/gocryptfs-tui ~/.cargo/bin/gocryptfs-tui`。
@@ -246,9 +246,9 @@ gocryptfs-tui [OPTIONS]
 
 OPTIONS:
     -c, --config <PATH>    配置文件路径
-                           [默认: ~/.config/gocryptfs-tui/config.yaml]
+                           [默认: ~/.config/gocryptfs-ui/config.yaml]
     -D, --data-dir <DIR>   数据目录（日志、历史、帮助）
-                           [默认: ~/.local/share/gocryptfs-tui]
+                           [默认: ~/.local/share/gocryptfs-ui]
     -l, --lang <CODE>      界面语言，可选 zh-CN / en-US
         --check-deps       检查运行时依赖并给出安装命令
         --print-paths      打印所有生效路径（排障）
@@ -292,8 +292,8 @@ gocryptfs-tui --print-paths
 TUI 顶部栏实时显示两行信息（第 1 行 Bin/CLI + 版本，第 2 行 Config/Data）：
 
 ```
-Bin: /usr/local/bin/gocryptfs-tui  CLI:  /usr/local/lib/gocryptfs-tui/gocryptfs-cli          v0.2.0
-Config: /home/you/.config/gocryptfs-tui/config.yaml  Data: /home/you/.local/share/gocryptfs-tui
+Bin: /usr/local/bin/gocryptfs-tui  CLI:  /usr/local/lib/gocryptfs-ui/gocryptfs-cli          v0.7.0
+Config: /home/you/.config/gocryptfs-ui/config.yaml  Data: /home/you/.local/share/gocryptfs-ui
 ```
 
 ---
@@ -329,7 +329,7 @@ gocryptfs-tui --lang en-US
 GOCRYPTFS_TUI_LANG=en-US gocryptfs-tui
 
 # 配置文件（持久化，覆盖系统 locale）
-# ~/.config/gocryptfs-tui/config.yaml
+# ~/.config/gocryptfs-ui/config.yaml
 language: zh-CN
 
 # 跟随系统 locale
@@ -337,7 +337,7 @@ LANG=zh_CN.UTF-8 gocryptfs-tui
 
 # Shell 后端同样支持（-l/--lang 或环境变量）
 gocryptfs-cli --lang en-US list
-GOCRYPTFS_LANG=en-US gocryptfs-cli -c ~/.config/gocryptfs-tui/config.yaml list
+GOCRYPTFS_LANG=en-US gocryptfs-cli -c ~/.config/gocryptfs-ui/config.yaml list
 ```
 
 ### 运行期切换
@@ -393,7 +393,7 @@ Shell 侧约定：文案模板放在 `shell/lib/i18n.sh`，只允许 `printf` �
 默认（遵循 XDG，`XDG_CONFIG_HOME` 生效）：
 
 ```
-${XDG_CONFIG_HOME:-~/.config}/gocryptfs-tui/config.yaml
+${XDG_CONFIG_HOME:-~/.config}/gocryptfs-ui/config.yaml
 ```
 
 优先级：`-c/--config` > `GOCRYPTFS_CONFIG` > `CONFIG_FILE`（兼容）> `XDG_CONFIG_HOME` > `~/.config`。
@@ -401,17 +401,20 @@ ${XDG_CONFIG_HOME:-~/.config}/gocryptfs-tui/config.yaml
 数据目录（`HELP.md`、内嵌后端）同理：
 
 ```
-${XDG_DATA_HOME:-~/.local/share}/gocryptfs-tui/
+${XDG_DATA_HOME:-~/.local/share}/gocryptfs-ui/
 ```
 
 优先级：`-D/--data-dir`（CLI 与 TUI 都支持）> `GOCRYPTFS_DATA_DIR` >
 `XDG_DATA_HOME` > `~/.local/share`。
 
+> **从 0.6.x 升级**：配置/数据/状态目录已由 `gocryptfs-tui` 更名为 `gocryptfs-ui`，首次启动会自动
+> 迁移旧目录；命令名（`gocryptfs-tui` / `gocryptfs-cli` / `gocryptfs-web`）保持不变。
+
 运行期状态（日志 `app.log.jsonl`、历史 `history.jsonl` 及 `.1`…`.N` 轮转文件）遵循
 XDG **状态**目录（与配置/数据分离，`XDG_STATE_HOME` 生效）：
 
 ```
-${XDG_STATE_HOME:-~/.local/state}/gocryptfs-tui/
+${XDG_STATE_HOME:-~/.local/state}/gocryptfs-ui/
 ```
 
 优先级：`LOG_FILE`/`HISTORY_FILE`（TUI 给子进程用）> `GOCRYPTFS_STATE_DIR` >
@@ -675,7 +678,7 @@ gocryptfs-tui
 CLI 和 TUI 的所有操作记录到**同一个文件**（位于 XDG 状态目录）：
 
 ```
-${XDG_STATE_HOME:-~/.local/state}/gocryptfs-tui/app.log.jsonl
+${XDG_STATE_HOME:-~/.local/state}/gocryptfs-ui/app.log.jsonl
 ```
 
 每行一条 JSON 记录：
@@ -778,7 +781,7 @@ TUI 侧：
 ### 目录结构
 
 ```
-gocryptfs-tui/
+gocryptfs-ui/
 ├── Cargo.toml
 ├── build.rs                 # 编译期版本注入
 ├── Makefile

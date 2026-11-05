@@ -11,8 +11,8 @@ Manage `gocryptfs` encrypted vaults on Linux — from the shell, a terminal UI, 
 | **Web UI** | `gocryptfs-web` | Browser UI — in development |
 
 All three frontends are thin clients over the same shell backend (`gocryptfs-cli`), so they behave
-identically and can be used independently. Config/data/state directories keep the historical
-`gocryptfs-tui` naming for compatibility.
+identically and can be used independently. Config/data/state directories live under `gocryptfs-ui`
+(auto-migrated once from the historical `gocryptfs-tui` name).
 
 ---
 
@@ -98,9 +98,9 @@ gocryptfs-cli --check-deps
 
 | Mode | Best for | Command | Needs |
 |---|---|---|---|
-| ① **One-liner** | Just want it installed | `curl -LsSf <release>/gocryptfs-tui-install.sh \| sh -s -- --user` (or `--system`) | `curl` + POSIX sh |
-| ② **git clone** | Want to keep the script / repeatable installs, without installing Rust | `git clone … && cd gocryptfs-tui && ./install.sh --from-release --user` | `git` + `curl` |
-| ③ **Source build** | Build it yourself / change the code | `git clone … && cd gocryptfs-tui && make build && ./install.sh --local --user` | `git` + **cargo** |
+| ① **One-liner** | Just want it installed | `curl -LsSf <release>/gocryptfs-ui-install.sh \| sh -s -- --user` (or `--system`) | `curl` + POSIX sh |
+| ② **git clone** | Want to keep the script / repeatable installs, without installing Rust | `git clone … && cd gocryptfs-ui && ./install.sh --from-release --user` | `git` + `curl` |
+| ③ **Source build** | Build it yourself / change the code | `git clone … && cd gocryptfs-ui && make build && ./install.sh --local --user` | `git` + **cargo** |
 
 Install locations (identical across all three modes):
 
@@ -108,9 +108,9 @@ Install locations (identical across all three modes):
 |---|---|---|
 | `--user` (default) | `~/.local` | No sudo required |
 | `--system` | `/usr/local` | Uses sudo as needed, and links `gocryptfs-cli` into `/usr/local/bin` by default |
-| `--prefix DIR` | Custom | e.g. `/opt/gocryptfs-tui` |
+| `--prefix DIR` | Custom | e.g. `/opt/gocryptfs-ui` |
 
-All three modes install `<prefix>/bin/gocryptfs-tui` and `<prefix>/lib/gocryptfs-tui/`
+All three modes install `<prefix>/bin/gocryptfs-tui` and `<prefix>/lib/gocryptfs-ui/`
 (the standalone Shell backend + `VERSION`) and write an install manifest; none of them **modify the shell profile** — they
 only print the `export PATH=…` you need to run; config and data directories follow XDG (see below), independent of install method.
 
@@ -118,21 +118,21 @@ only print the `export PATH=…` you need to run; config and data directories fo
 
 ```bash
 # User-level → ~/.local/bin (default, no sudo)
-curl -LsSf https://github.com/lockejet/gocryptfs-ui/releases/latest/download/gocryptfs-tui-install.sh | sh
+curl -LsSf https://github.com/lockejet/gocryptfs-ui/releases/latest/download/gocryptfs-ui-install.sh | sh
 
 # System-level → /usr/local/bin (sudo as needed, and links the standalone CLI)
-curl -LsSf https://github.com/lockejet/gocryptfs-ui/releases/latest/download/gocryptfs-tui-install.sh \
+curl -LsSf https://github.com/lockejet/gocryptfs-ui/releases/latest/download/gocryptfs-ui-install.sh \
   | sh -s -- --system
 
 # Pin a version
-curl -LsSf .../gocryptfs-tui-install.sh | sh -s -- --user --version v0.5.0
+curl -LsSf .../gocryptfs-ui-install.sh | sh -s -- --user --version v0.5.0
 ```
 
 The script will: detect the architecture/libc → download the matching `tar.xz` and **verify its sha256** → fetch
 `shell/` from the same Release's `source.tar.gz` as the standalone backend (guaranteeing it matches the TUI version) → run
 `--check-deps` → write the install manifest (`INSTALLED.json` / `INSTALLED.files`).
 
-> **Offline / air-gapped**: just download `gocryptfs-tui-<target>.tar.xz` from
+> **Offline / air-gapped**: just download `gocryptfs-ui-<target>.tar.xz` from
 > [Releases](https://github.com/lockejet/gocryptfs-ui/releases), extract it, and put `gocryptfs-tui` in
 > `~/.local/bin` (the embedded backend unpacks itself into the data directory on first run).
 
@@ -140,7 +140,7 @@ The script will: detect the architecture/libc → download the matching `tar.xz`
 
 ```bash
 git clone https://github.com/lockejet/gocryptfs-ui.git
-cd gocryptfs-tui
+cd gocryptfs-ui
 ./install.sh --from-release            # defaults to the current checkout's tag; installs to ~/.local
 ./install.sh --from-release --system   # installs to /usr/local
 ```
@@ -152,7 +152,7 @@ cd gocryptfs-tui
 
 ```bash
 git clone https://github.com/lockejet/gocryptfs-ui.git
-cd gocryptfs-tui
+cd gocryptfs-ui
 make build                             # or cargo build --release
 ./install.sh --local                   # installs to ~/.local
 ./install.sh --local --system          # installs to /usr/local
@@ -181,23 +181,23 @@ gocryptfs-tui --print-paths     # troubleshooting: see every path actually in us
 ```
 
 > **Canonical location of the standalone CLI**: on first run the TUI unpacks the embedded backend to
-> `${XDG_DATA_HOME:-~/.local/share}/gocryptfs-tui/backend/gocryptfs-cli`,
+> `${XDG_DATA_HOME:-~/.local/share}/gocryptfs-ui/backend/gocryptfs-cli`,
 > identically in all three modes. To use it directly from the command line, create a symlink once:
 > ```bash
-> ln -sf "${XDG_DATA_HOME:-$HOME/.local/share}/gocryptfs-tui/backend/gocryptfs-cli" \
+> ln -sf "${XDG_DATA_HOME:-$HOME/.local/share}/gocryptfs-ui/backend/gocryptfs-cli" \
 >        "${XDG_BIN_HOME:-$HOME/.local/bin}/gocryptfs-cli"
 > ```
-> `--system` links `<prefix>/lib/gocryptfs-tui/gocryptfs-cli` into `/usr/local/bin` automatically.
+> `--system` links `<prefix>/lib/gocryptfs-ui/gocryptfs-cli` into `/usr/local/bin` automatically.
 
 ### Upgrading
 
 The TUI and the Shell backend (`gocryptfs-cli` + `lib/*.sh`) must be **updated as a set**, otherwise you may see
 inconsistencies such as "the UI is already in English but the output pane is still in Chinese". The embedded backend is updated
-along with the binary (the unpack directory `${XDG_DATA_HOME:-~/.local/share}/gocryptfs-tui/backend/` is rewritten only when its contents change).
+along with the binary (the unpack directory `${XDG_DATA_HOME:-~/.local/share}/gocryptfs-ui/backend/` is rewritten only when its contents change).
 
 ```bash
 # ① One-liner: rerun the same command
-curl -LsSf .../gocryptfs-tui-install.sh | sh -s -- --user
+curl -LsSf .../gocryptfs-ui-install.sh | sh -s -- --user
 
 # ② clone: git pull, then rerun
 git pull && ./install.sh --from-release --user
@@ -213,25 +213,25 @@ If the TUI is not calling the newly installed backend, you can point it at one t
 
 ```bash
 # ① one-liner / ② clone / ③ source all uninstall exactly what the install manifest lists
-curl -LsSf .../gocryptfs-tui-install.sh | sh -s -- --uninstall --user
-curl -LsSf .../gocryptfs-tui-install.sh | sh -s -- --uninstall --system
+curl -LsSf .../gocryptfs-ui-install.sh | sh -s -- --uninstall --user
+curl -LsSf .../gocryptfs-ui-install.sh | sh -s -- --uninstall --system
 ./install.sh --uninstall --user            # when the script is already local
 ./install.sh --uninstall --system
 
 # Convenience wrappers
 make uninstall                             # equivalent to --user
 make uninstall-system                      # equivalent to --system
-make uninstall PREFIX=/opt/gocryptfs-tui   # custom prefix
+make uninstall PREFIX=/opt/gocryptfs-ui   # custom prefix
 ```
 
-> Uninstalling does **not** delete config, data or state: config `${XDG_CONFIG_HOME:-~/.config}/gocryptfs-tui/`,
-> data `${XDG_DATA_HOME:-~/.local/share}/gocryptfs-tui/` (HELP.md and the unpacked embedded backend),
-> state `${XDG_STATE_HOME:-~/.local/state}/gocryptfs-tui/` (logs, history and rotated files).
+> Uninstalling does **not** delete config, data or state: config `${XDG_CONFIG_HOME:-~/.config}/gocryptfs-ui/`,
+> data `${XDG_DATA_HOME:-~/.local/share}/gocryptfs-ui/` (HELP.md and the unpacked embedded backend),
+> state `${XDG_STATE_HOME:-~/.local/state}/gocryptfs-ui/` (logs, history and rotated files).
 > Delete these three directories yourself for a full cleanup.
 >
-> `install.sh --uninstall` reads `<prefix>/lib/gocryptfs-tui/INSTALLED.files` and deletes the entries one by one,
+> `install.sh --uninstall` reads `<prefix>/lib/gocryptfs-ui/INSTALLED.files` and deletes the entries one by one,
 > and only allows deleting paths inside the prefix; `make uninstall` deletes `$PREFIX/bin/gocryptfs-tui`,
-> `$PREFIX/bin/gocryptfs-cli`, and `$PREFIX/lib/gocryptfs-tui/`.
+> `$PREFIX/bin/gocryptfs-cli`, and `$PREFIX/lib/gocryptfs-ui/`.
 >
 > If you installed 0.4.x or earlier with cargo-dist's `-installer.sh` (into `~/.cargo/bin` or `~/.local/bin`):
 > `rm -f ~/.local/bin/gocryptfs-tui ~/.cargo/bin/gocryptfs-tui`.
@@ -247,9 +247,9 @@ gocryptfs-tui [OPTIONS]
 
 OPTIONS:
     -c, --config <PATH>    Config file path
-                           [default: ~/.config/gocryptfs-tui/config.yaml]
+                           [default: ~/.config/gocryptfs-ui/config.yaml]
     -D, --data-dir <DIR>   Data directory (logs, history, help)
-                           [default: ~/.local/share/gocryptfs-tui]
+                           [default: ~/.local/share/gocryptfs-ui]
     -l, --lang <CODE>      UI language, one of zh-CN / en-US
         --check-deps       Check runtime dependencies and print install commands
         --print-paths      Print all effective paths (troubleshooting)
@@ -293,8 +293,8 @@ gocryptfs-tui --print-paths
 The TUI top bar shows two lines of live information (line 1: Bin/CLI + version, line 2: Config/Data):
 
 ```
-Bin: /usr/local/bin/gocryptfs-tui  CLI:  /usr/local/lib/gocryptfs-tui/gocryptfs-cli          v0.2.0
-Config: /home/you/.config/gocryptfs-tui/config.yaml  Data: /home/you/.local/share/gocryptfs-tui
+Bin: /usr/local/bin/gocryptfs-tui  CLI:  /usr/local/lib/gocryptfs-ui/gocryptfs-cli          v0.7.0
+Config: /home/you/.config/gocryptfs-ui/config.yaml  Data: /home/you/.local/share/gocryptfs-ui
 ```
 
 ---
@@ -330,7 +330,7 @@ gocryptfs-tui --lang en-US
 GOCRYPTFS_TUI_LANG=en-US gocryptfs-tui
 
 # Config file (persistent, overrides the system locale)
-# ~/.config/gocryptfs-tui/config.yaml
+# ~/.config/gocryptfs-ui/config.yaml
 language: zh-CN
 
 # Follow the system locale
@@ -338,7 +338,7 @@ LANG=zh_CN.UTF-8 gocryptfs-tui
 
 # The Shell backend supports this too (-l/--lang or the environment variable)
 gocryptfs-cli --lang en-US list
-GOCRYPTFS_LANG=en-US gocryptfs-cli -c ~/.config/gocryptfs-tui/config.yaml list
+GOCRYPTFS_LANG=en-US gocryptfs-cli -c ~/.config/gocryptfs-ui/config.yaml list
 ```
 
 ### Switching at runtime
@@ -394,7 +394,7 @@ call them as `t <key> [args...]` (no newline) and `te <key> [args...]` (with new
 Default (XDG-aware, `XDG_CONFIG_HOME` is honored):
 
 ```
-${XDG_CONFIG_HOME:-~/.config}/gocryptfs-tui/config.yaml
+${XDG_CONFIG_HOME:-~/.config}/gocryptfs-ui/config.yaml
 ```
 
 Priority: `-c/--config` > `GOCRYPTFS_CONFIG` > `CONFIG_FILE` (legacy) > `XDG_CONFIG_HOME` > `~/.config`.
@@ -402,17 +402,21 @@ Priority: `-c/--config` > `GOCRYPTFS_CONFIG` > `CONFIG_FILE` (legacy) > `XDG_CON
 The data directory (`HELP.md`, embedded backend) works the same way:
 
 ```
-${XDG_DATA_HOME:-~/.local/share}/gocryptfs-tui/
+${XDG_DATA_HOME:-~/.local/share}/gocryptfs-ui/
 ```
 
 Priority: `-D/--data-dir` (supported by both the CLI and the TUI) > `GOCRYPTFS_DATA_DIR` >
 `XDG_DATA_HOME` > `~/.local/share`.
 
+> **Upgrading from 0.6.x**: the config/data/state directories were renamed from `gocryptfs-tui` to
+> `gocryptfs-ui`. On first start the old directories are moved automatically; the commands (`gocryptfs-tui`,
+> `gocryptfs-cli`, `gocryptfs-web`) are unchanged.
+
 Runtime state (log `app.log.jsonl`, history `history.jsonl` and `.1`…`.N` rotated files)
 follows the XDG **state** directory (separate from config/data; `XDG_STATE_HOME` applies):
 
 ```
-${XDG_STATE_HOME:-~/.local/state}/gocryptfs-tui/
+${XDG_STATE_HOME:-~/.local/state}/gocryptfs-ui/
 ```
 
 Priority: `LOG_FILE`/`HISTORY_FILE` (used by the TUI for child processes) > `GOCRYPTFS_STATE_DIR` >
@@ -676,7 +680,7 @@ The UI is divided into 4 focus panes (list / details / directory / output); cycl
 Every operation from the CLI and the TUI is recorded in **the same file** (in the XDG state directory):
 
 ```
-${XDG_STATE_HOME:-~/.local/state}/gocryptfs-tui/app.log.jsonl
+${XDG_STATE_HOME:-~/.local/state}/gocryptfs-ui/app.log.jsonl
 ```
 
 One JSON record per line:
@@ -779,7 +783,7 @@ TUI side:
 ### Directory structure
 
 ```
-gocryptfs-tui/
+gocryptfs-ui/
 ├── Cargo.toml
 ├── build.rs                 # compile-time version injection
 ├── Makefile

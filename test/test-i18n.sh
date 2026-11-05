@@ -149,10 +149,10 @@ printf 'language: en-US\n' > "$CONFIG_SH_EN"
 
 # 4.1 帮助文案
 out="$(env LC_ALL=C bash "$SH" help | head -1)"
-check "shell 默认中文帮助" "gocryptfs-cli - gocryptfs-tui 的 Shell 后端" "$out"
+check "shell 默认中文帮助" "gocryptfs-cli - gocryptfs-ui 的 Shell 后端" "$out"
 
 out="$(env LC_ALL=C bash "$SH" --lang en-US help | head -1)"
-check "shell --lang en-US 帮助" "gocryptfs-cli - shell backend of gocryptfs-tui" "$out"
+check "shell --lang en-US 帮助" "gocryptfs-cli - shell backend of gocryptfs-ui" "$out"
 
 # 4.2 系统 locale / 环境变量 / 配置
 out="$(env LANG=en_US.UTF-8 LC_ALL= bash "$SH" -c "$TMP/none.yaml" list 2>&1 | head -1)"

@@ -32,14 +32,14 @@ I18N_ZH=(
     [cli.error.lang_needs_value]='错误: -l/--lang 需要语言代码'
     [cli.error.unsupported_lang]='不支持的语言: %s（可用: zh-CN, en-US）'
     [cli.error.unknown_command]='未知命令: %s'
-    [cli.help]='gocryptfs-cli - gocryptfs-tui 的 Shell 后端
+    [cli.help]='gocryptfs-cli - gocryptfs-ui 的 Shell 后端
 用法: gocryptfs-cli [-c <config>] [-D <data-dir>] [-l <lang>] <command> [options]
 命令: list / info / ls / tree / mount / umount / create / remove
       config / edit / check-deps / log / help
 
 全局选项:
-  -c, --config FILE  配置文件路径（默认 $XDG_CONFIG_HOME/gocryptfs-tui/config.yaml）
-  -D, --data-dir DIR 数据目录（默认 $XDG_DATA_HOME/gocryptfs-tui；指定后日志/历史也放这里）
+  -c, --config FILE  配置文件路径（默认 $XDG_CONFIG_HOME/gocryptfs-ui/config.yaml）
+  -D, --data-dir DIR 数据目录（默认 $XDG_DATA_HOME/gocryptfs-ui；指定后日志/历史也放这里）
   -l, --lang CODE    界面语言: zh-CN | en-US
   -V, --version      显示版本
   --json             JSON 输出
@@ -171,14 +171,14 @@ I18N_EN=(
     [cli.error.lang_needs_value]='Error: -l/--lang needs a language code'
     [cli.error.unsupported_lang]='Unsupported language: %s (available: zh-CN, en-US)'
     [cli.error.unknown_command]='Unknown command: %s'
-    [cli.help]='gocryptfs-cli - shell backend of gocryptfs-tui
+    [cli.help]='gocryptfs-cli - shell backend of gocryptfs-ui
 Usage: gocryptfs-cli [-c <config>] [-D <data-dir>] [-l <lang>] <command> [options]
 Commands: list / info / ls / tree / mount / umount / create / remove
           config / edit / check-deps / log / help
 
 Global options:
-  -c, --config FILE  config file path (default $XDG_CONFIG_HOME/gocryptfs-tui/config.yaml)
-  -D, --data-dir DIR data dir (default $XDG_DATA_HOME/gocryptfs-tui; logs/history follow it when set)
+  -c, --config FILE  config file path (default $XDG_CONFIG_HOME/gocryptfs-ui/config.yaml)
+  -D, --data-dir DIR data dir (default $XDG_DATA_HOME/gocryptfs-ui; logs/history follow it when set)
   -l, --lang CODE    UI language: zh-CN | en-US
   -V, --version      show version
   --json             JSON output

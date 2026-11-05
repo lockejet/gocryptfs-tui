@@ -94,7 +94,8 @@ case "$PREFIX" in
 esac
 PREFIX="${PREFIX%/}"
 
-LIBDIR="$PREFIX/lib/gocryptfs-tui"
+LIBDIR="$PREFIX/lib/gocryptfs-ui"
+LEGACY_LIBDIR="$PREFIX/lib/gocryptfs-tui"
 BINDIR="$PREFIX/bin"
 MANIFEST="$LIBDIR/INSTALLED.json"
 MANIFEST_FILES="$LIBDIR/INSTALLED.files"
@@ -106,7 +107,7 @@ fi
 
 # 只删除固定的 gocryptfs-tui 目录，避免误删
 case "$LIBDIR" in
-    */lib/gocryptfs-tui) ;;
+    */lib/gocryptfs-ui|*/lib/gocryptfs-tui) ;;
     *) echo "[!] refusing to operate on unexpected path: $LIBDIR" >&2; exit 1 ;;
 esac
 
@@ -190,6 +191,7 @@ if [ "$UNINSTALL" -eq 1 ]; then
     # 无论有无清单都清理已知路径，并删除空的 lib 目录
     priv rm -f "$BINDIR/gocryptfs-cli" "$BINDIR/gocryptfs-tui" "$BINDIR/gocryptfs-web"
     priv rm -rf "$LIBDIR"
+    priv rm -rf "$LEGACY_LIBDIR"
     # 只在确认为空时才删父目录（非空会失败，不影响其它文件）
     priv rmdir "$PREFIX/lib" >/dev/null 2>&1 || true
     priv rmdir "$BINDIR" >/dev/null 2>&1 || true
@@ -199,9 +201,9 @@ if [ "$UNINSTALL" -eq 1 ]; then
     echo "  $LIBDIR"
     echo ""
     echo "[i] config/data/state directories were kept (remove them manually if needed):"
-    echo "  ${XDG_CONFIG_HOME:-$HOME/.config}/gocryptfs-tui/"
-    echo "  ${XDG_DATA_HOME:-$HOME/.local/share}/gocryptfs-tui/"
-    echo "  ${XDG_STATE_HOME:-$HOME/.local/state}/gocryptfs-tui/"
+    echo "  ${XDG_CONFIG_HOME:-$HOME/.config}/gocryptfs-ui/"
+    echo "  ${XDG_DATA_HOME:-$HOME/.local/share}/gocryptfs-ui/"
+    echo "  ${XDG_STATE_HOME:-$HOME/.local/state}/gocryptfs-ui/"
     remaining="$(command -v gocryptfs-cli 2>/dev/null || true)"
     if [ -n "$remaining" ]; then
         echo ""
@@ -365,6 +367,7 @@ BIN_VERSION="$("$BIN_SRC" --version 2>/dev/null | sed -n 's/^gocryptfs-tui //p' 
 echo "==> installing to $PREFIX"
 priv mkdir -p "$LIBDIR/lib" "$BINDIR"
 priv rm -rf "$LIBDIR"
+priv rm -rf "$LEGACY_LIBDIR"   # 0.7 之前叫 lib/gocryptfs-tui
 priv mkdir -p "$LIBDIR/lib"
 
 # 已安装文件清单（供 INSTALLED.files / --uninstall 使用）

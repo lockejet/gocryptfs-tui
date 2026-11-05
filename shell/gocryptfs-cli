@@ -17,9 +17,12 @@ else
     source "$LIB_DIR/common.sh"
 fi
 
+# 旧目录迁移（lib 已在 source 时尝试过；这里保证 CLI 侧也执行一次）
+migrate_legacy_dirs 2>/dev/null || true
+
 # 路径解析与 Rust 侧保持一致（XDG 优先；GOCRYPTFS_* 优先，旧变量兼容）
-CONFIG_FILE="${GOCRYPTFS_CONFIG:-${CONFIG_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/gocryptfs-tui/config.yaml}}"
-DATA_DIR="${GOCRYPTFS_DATA_DIR:-${DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/gocryptfs-tui}}"
+CONFIG_FILE="${GOCRYPTFS_CONFIG:-${CONFIG_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/gocryptfs-ui/config.yaml}}"
+DATA_DIR="${GOCRYPTFS_DATA_DIR:-${DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/gocryptfs-ui}}"
 VERSION_FILE="$SCRIPT_DIR/VERSION"
 JSON_MODE=false
 VERBOSE=false

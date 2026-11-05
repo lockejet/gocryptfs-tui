@@ -33,7 +33,7 @@ ProtectKernelTunables=yes
 ProtectControlGroups=yes
 RestrictSUIDSGID=yes
 # 若把配置/数据/状态目录放到别处，把这些路径加进来
-ReadWritePaths=%h/.local/share/gocryptfs-tui %h/.local/state/gocryptfs-tui %h/.config/gocryptfs-tui
+ReadWritePaths=%h/.local/share/gocryptfs-ui %h/.local/state/gocryptfs-ui %h/.config/gocryptfs-ui
 
 [Install]
 WantedBy=default.target

@@ -42,7 +42,7 @@ security responsibility is limited to:
 
 ### 3. Logs
 
-- `$XDG_STATE_HOME/gocryptfs-tui/app.log.jsonl` (default `~/.local/state/gocryptfs-tui/app.log.jsonl`)
+- `$XDG_STATE_HOME/gocryptfs-ui/app.log.jsonl` (default `~/.local/state/gocryptfs-ui/app.log.jsonl`)
   records actions and paths only, **never passwords**
 - Paths in the log can expose your directory structure; do not share them publicly
 

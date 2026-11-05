@@ -35,25 +35,49 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
 fi
 
 # § 1. 常量（XDG 优先；GOCRYPTFS_* / 旧变量兼容）
+# ---- 目录改名迁移（0.7：gocryptfs-tui → gocryptfs-ui）----
+# 只在默认路径下迁移（显式 GOCRYPTFS_*/CONFIG_FILE/DATA_DIR 不受影响）；
+# 失败不致命（保留旧目录，读取逻辑会退回新路径）。
+_gfs_move_dir() { # <legacy> <new>
+    [ -d "$1" ] && [ ! -e "$2" ] || return 0
+    { mkdir -p "$(dirname "$2")" 2>/dev/null || true; }
+    { mv "$1" "$2" 2>/dev/null || { cp -a "$1" "$2" 2>/dev/null && rm -rf "$1" 2>/dev/null; }; } || true
+}
+migrate_legacy_dirs() {
+    if [ -z "${GOCRYPTFS_CONFIG:-}" ] && [ -z "${CONFIG_FILE:-}" ]; then
+        _gfs_move_dir "${XDG_CONFIG_HOME:-$HOME/.config}/gocryptfs-tui" \
+                      "${XDG_CONFIG_HOME:-$HOME/.config}/gocryptfs-ui"
+    fi
+    if [ -z "${GOCRYPTFS_DATA_DIR:-}" ] && [ -z "${DATA_DIR:-}" ]; then
+        _gfs_move_dir "${XDG_DATA_HOME:-$HOME/.local/share}/gocryptfs-tui" \
+                      "${XDG_DATA_HOME:-$HOME/.local/share}/gocryptfs-ui"
+    fi
+    if [ -z "${GOCRYPTFS_STATE_DIR:-}" ]; then
+        _gfs_move_dir "${XDG_STATE_HOME:-$HOME/.local/state}/gocryptfs-tui" \
+                      "${XDG_STATE_HOME:-$HOME/.local/state}/gocryptfs-ui"
+    fi
+}
+migrate_legacy_dirs
+
 # 显式传入的 LOG_FILE/HISTORY_FILE（例如 TUI 传给子进程）优先；
 # 其余跟随 STATE_DIR（运行期状态：日志/历史）。
 LOG_FILE_ENV="${LOG_FILE:-}"
 HISTORY_FILE_ENV="${HISTORY_FILE:-}"
-DATA_DIR="${GOCRYPTFS_DATA_DIR:-${DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/gocryptfs-tui}}"
+DATA_DIR="${GOCRYPTFS_DATA_DIR:-${DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/gocryptfs-ui}}"
 
 # 重新计算状态目录与日志/历史路径。
 # 必须在解析完 -D/--data-dir 之后再调用一次：lib 在 source 时还不知道参数。
-#   默认（遵循 XDG）：$XDG_STATE_HOME/gocryptfs-tui
+#   默认（遵循 XDG）：$XDG_STATE_HOME/gocryptfs-ui
 #   显式 -D / GOCRYPTFS_DATA_DIR：与数据目录合并（隔离调试时运行期文件同处）
 #   GOCRYPTFS_STATE_DIR 始终最高优先
 apply_data_dir() {
-    DATA_DIR="${DATA_DIR:-${GOCRYPTFS_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/gocryptfs-tui}}"
+    DATA_DIR="${DATA_DIR:-${GOCRYPTFS_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/gocryptfs-ui}}"
     if [ -n "${GOCRYPTFS_STATE_DIR:-}" ]; then
         STATE_DIR="$GOCRYPTFS_STATE_DIR"
     elif [ -n "${DATA_DIR_EXPLICIT:-}" ] || [ -n "${GOCRYPTFS_DATA_DIR:-}" ]; then
         STATE_DIR="$DATA_DIR"
     else
-        STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/gocryptfs-tui"
+        STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/gocryptfs-ui"
     fi
     LOG_FILE="${LOG_FILE_ENV:-$STATE_DIR/app.log.jsonl}"
     HISTORY_FILE="${HISTORY_FILE_ENV:-$STATE_DIR/history.jsonl}"
@@ -79,10 +103,10 @@ apply_data_dir
 # 锁文件：优先 XDG_RUNTIME_DIR（0700，避免固定 /tmp 路径的 symlink 风险）
 if [ -z "${LOCK_FILE:-}" ]; then
     if [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -d "${XDG_RUNTIME_DIR:-}" ]; then
-        LOCK_FILE="$XDG_RUNTIME_DIR/gocryptfs-tui.lock"
+        LOCK_FILE="$XDG_RUNTIME_DIR/gocryptfs-ui.lock"
     else
         # 用 bash 内置 UID，避免受限 PATH（测试/极简环境）里 id 不可用
-        LOCK_FILE="/tmp/gocryptfs-tui.${UID:-0}.lock"
+        LOCK_FILE="/tmp/gocryptfs-ui.${UID:-0}.lock"
     fi
 fi
 export LOCK_FILE

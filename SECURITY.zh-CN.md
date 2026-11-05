@@ -41,7 +41,7 @@
 
 ### 3. 日志
 
-- `$XDG_STATE_HOME/gocryptfs-tui/app.log.jsonl`（默认 `~/.local/state/gocryptfs-tui/app.log.jsonl`）
+- `$XDG_STATE_HOME/gocryptfs-ui/app.log.jsonl`（默认 `~/.local/state/gocryptfs-ui/app.log.jsonl`）
   只记录操作和路径，**不记录密码**
 - 日志中的路径可能暴露目录结构，请勿公开分享
 

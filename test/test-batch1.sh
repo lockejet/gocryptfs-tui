@@ -171,7 +171,7 @@ check "-D 决定日志路径" "1" "$v"
 
 # 19b. 默认把日志/历史放到 XDG_STATE_HOME（XDG 合规；-D 时才与数据目录合并）
 out="$(env -i HOME="$HOME" PATH="/usr/bin:/bin" XDG_STATE_HOME=/tmp/gocryptfs-tui-state LC_ALL=C bash "$CLI" log 2>&1 | head -1)"
-case "$out" in *"/tmp/gocryptfs-tui-state/gocryptfs-tui/app.log.jsonl"*) v=1 ;; *) v=0 ;; esac
+case "$out" in *"/tmp/gocryptfs-tui-state/gocryptfs-ui/app.log.jsonl"*) v=1 ;; *) v=0 ;; esac
 check "默认日志位置为 XDG_STATE_HOME" "1" "$v"
 
 # 19c. GOCRYPTFS_STATE_DIR 覆盖状态目录
@@ -182,11 +182,21 @@ check "GOCRYPTFS_STATE_DIR 生效" "1" "$v"
 # 19d. 锁文件优先 XDG_RUNTIME_DIR（0700，避免固定 /tmp 路径）
 mkdir -p /tmp/gocryptfs-tui-run
 out="$(env -i HOME="$HOME" PATH="/usr/bin:/bin" XDG_RUNTIME_DIR=/tmp/gocryptfs-tui-run LC_ALL=C bash -c "source \"$LIB\"; printf '%s' \"\$LOCK_FILE\"" 2>&1)"
-check "锁文件优先 XDG_RUNTIME_DIR" "/tmp/gocryptfs-tui-run/gocryptfs-tui.lock" "$out"
+check "锁文件优先 XDG_RUNTIME_DIR" "/tmp/gocryptfs-tui-run/gocryptfs-ui.lock" "$out"
+
+# 19e. 旧目录自动迁移（0.7：gocryptfs-tui → gocryptfs-ui）
+MT="$(mktemp -d /tmp/gocryptfs-tui-mig.XXXXXX)"
+mkdir -p "$MT/cfg/gocryptfs-tui" "$MT/data/gocryptfs-tui" "$MT/state/gocryptfs-tui"
+printf 'language: en-US\n' > "$MT/cfg/gocryptfs-tui/config.yaml"
+out="$(env -i HOME="$HOME" PATH=/usr/bin:/bin XDG_CONFIG_HOME="$MT/cfg" XDG_DATA_HOME="$MT/data" XDG_STATE_HOME="$MT/state" LC_ALL=C bash "$CLI" config 2>&1)"
+check "旧配置目录迁移到 gocryptfs-ui" "$MT/cfg/gocryptfs-ui/config.yaml" "$out"
+check "旧数据目录已迁移" "yes" "$([ -d "$MT/data/gocryptfs-ui" ] && [ ! -d "$MT/data/gocryptfs-tui" ] && echo yes || echo no)"
+check "旧状态目录已迁移" "yes" "$([ -d "$MT/state/gocryptfs-ui" ] && [ ! -d "$MT/state/gocryptfs-tui" ] && echo yes || echo no)"
+rm -rf "$MT"
 
 # 20. XDG_CONFIG_HOME 生效（无 -c 时）
 out="$(env LC_ALL=C XDG_CONFIG_HOME=/tmp/gocryptfs-tui-xdg bash "$CLI" config 2>&1)"
-check "XDG_CONFIG_HOME 生效" "/tmp/gocryptfs-tui-xdg/gocryptfs-tui/config.yaml" "$out"
+check "XDG_CONFIG_HOME 生效" "/tmp/gocryptfs-tui-xdg/gocryptfs-ui/config.yaml" "$out"
 
 # 21. 兼容旧变量 CONFIG_FILE
 out="$(env LC_ALL=C CONFIG_FILE=/tmp/legacy-config.yaml bash "$CLI" config 2>&1)"

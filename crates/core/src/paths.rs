@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::{backend, APP_NAME, CLI_NAME};
+use crate::{backend, APP_NAME, CLI_NAME, LEGACY_APP_NAME};
 
 /// 后端路径优先级：`GOCRYPTFS_CLI` > 内嵌释放副本 > PATH 中的 `gocryptfs-cli`。
 pub fn cli_path_from(env: Option<&str>, embedded: Option<&str>) -> String {
@@ -119,6 +119,59 @@ pub fn resolve_data_dir(cli_opt: Option<PathBuf>) -> PathBuf {
         PathBuf::from("/tmp").join(APP_NAME)
     };
     PathBuf::from(absolute_path(&raw.to_string_lossy()))
+}
+
+/// 0.7 起应用目录名从 `gocryptfs-tui` 改为 `gocryptfs-ui`：
+/// 首次启动时把旧目录整体搬到新位置（目标已存在则不动，等价于保留新目录）。
+/// 只处理默认路径（尾部是 APP_NAME 的目录）；显式 `-D`/`-c` 不受影响。
+pub fn migrate_legacy_dirs(config: &str, data_dir: &Path, state_dir: &Path) {
+    if let Some(cfg_dir) = Path::new(config).parent() {
+        if cfg_dir.file_name().map(|n| n == APP_NAME).unwrap_or(false) {
+            move_legacy_dir(&cfg_dir.with_file_name(LEGACY_APP_NAME), cfg_dir);
+        }
+    }
+    for dir in [data_dir, state_dir] {
+        if dir.file_name().map(|n| n == APP_NAME).unwrap_or(false) {
+            move_legacy_dir(&dir.with_file_name(LEGACY_APP_NAME), dir);
+        }
+    }
+}
+
+/// 旧目录存在且新目录不存在时搬迁；rename 失败（跨设备）退回递归复制。
+fn move_legacy_dir(legacy: &Path, new: &Path) {
+    if !legacy.is_dir() || new.exists() {
+        return;
+    }
+    if let Some(parent) = new.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if std::fs::rename(legacy, new).is_ok() {
+        return;
+    }
+    if copy_dir_all(legacy, new).is_ok() {
+        let _ = std::fs::remove_dir_all(legacy);
+    }
+}
+
+fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let to = dst.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir_all(&entry.path(), &to)?;
+        } else if ty.is_symlink() {
+            #[cfg(unix)]
+            {
+                let target = std::fs::read_link(entry.path())?;
+                let _ = std::os::unix::fs::symlink(target, &to);
+            }
+        } else {
+            std::fs::copy(entry.path(), &to)?;
+        }
+    }
+    Ok(())
 }
 
 /// 运行期状态目录（日志/历史）。
