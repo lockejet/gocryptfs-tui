@@ -790,12 +790,11 @@ fn usage() {
 }
 
 fn default_token_file() -> PathBuf {
-    let config = core::paths::resolve_config(None);
-    let dir = Path::new(&config)
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
-    dir.join(core::APP_NAME).join("web.token")
+    // 与配置目录同级（遵循 XDG_CONFIG_HOME）；不跟随 -c 的自定义文件名
+    if let Some(dir) = dirs::config_dir() {
+        return dir.join(core::APP_NAME).join("web.token");
+    }
+    PathBuf::from("/tmp").join(core::APP_NAME).join("web.token")
 }
 
 fn load_or_create_token(path: &Path) -> Result<String, String> {

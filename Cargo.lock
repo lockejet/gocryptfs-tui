@@ -394,6 +394,7 @@ dependencies = [
  "axum",
  "base64",
  "chrono",
+ "dirs",
  "gocryptfs-ui-core",
  "http-body-util",
  "rand",
