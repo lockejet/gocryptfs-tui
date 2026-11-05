@@ -25,18 +25,16 @@ ExecStart=%h/.local/bin/gocryptfs-web --listen 127.0.0.1:30032
 Restart=on-failure
 RestartSec=2
 
-# 加固（注意：以下两项**不能开**，否则 gocryptfs 无法挂载/卸载）：
-#   * NoNewPrivileges=yes  —— 会禁用 fusermount 的 setuid，报 "Operation not permitted"
-#   * RestrictSUIDSGID=yes —— 同上
-# 也不能用 ProtectSystem=strict：它把整个文件系统挂成只读，挂载点会受影响；
-# ProtectSystem=full 只让 /usr /boot /etc 只读，/srv /home /mnt 仍可挂载。
-PrivateTmp=yes
-ProtectSystem=full
-ProtectKernelTunables=yes
-ProtectControlGroups=yes
-# 若把配置/数据/状态目录放到别处，把这些路径加进来
-ReadWritePaths=%h/.local/share/gocryptfs-ui %h/.local/state/gocryptfs-ui %h/.config/gocryptfs-ui
-# 挂载点不在这里列：ProtectSystem=full 下 /srv /home /mnt 保持可写
+# 重要：gocryptfs 的挂载/卸载必须在 **host mount namespace** 中完成。
+# 因此本单元刻意不使用会创建私有 mount namespace 的选项：
+#   PrivateTmp / ProtectSystem / ProtectHome / ProtectKernelTunables / ProtectControlGroups
+#   （这些选项会让服务看到一份挂载副本，且它自己挂载的卷在主机上不可见）
+# 也不能开 NoNewPrivileges / RestrictSUIDSGID：会禁用 fusermount 的 setuid。
+# 安全性由「只监听 127.0.0.1 + token/TLS 反向代理 + 普通用户运行」保证。
+NoNewPrivileges=no
+PrivateTmp=no
+ProtectSystem=no
+ProtectHome=no
 
 [Install]
 WantedBy=default.target
