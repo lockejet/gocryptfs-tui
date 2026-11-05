@@ -127,7 +127,7 @@ test-cli: build  ## 运行 CLI shell 测试批次
 
 .PHONY: web-build web-clean
 web-build:  ## 构建 Web UI 前端到 web/dist（需要 node/pnpm；产物随仓库提交以便 CI 无需 Node）
-	cd web && pnpm install && pnpm build
+	cd web && npm install && npm run build
 
 web-clean:  ## 清空 Web UI 构建产物
 	rm -rf web/dist
