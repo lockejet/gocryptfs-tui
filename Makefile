@@ -125,6 +125,13 @@ test-i18n: build-debug  ## 运行 i18n 验收测试（TUI + Shell 语言解析�
 test-cli: build  ## 运行 CLI shell 测试批次
 	bash test/test-all.sh
 
+.PHONY: web-build web-clean
+web-build:  ## 构建 Web UI 前端到 web/dist（需要 node/pnpm；产物随仓库提交以便 CI 无需 Node）
+	cd web && pnpm install && pnpm build
+
+web-clean:  ## 清空 Web UI 构建产物
+	rm -rf web/dist
+
 .PHONY: test-install
 test-install: build  ## 安装/卸载回归测试（install.sh，本地源码模式）
 	bash test/test-install.sh
@@ -324,6 +331,7 @@ help:  ## 显示本帮助
 	@echo ""
 	@echo "构建:"
 	@echo "  make build             编译本机 release（默认）"
+	@echo "  make web-build         构建 Web UI 前端到 web/dist（需要 node/pnpm）"
 	@echo "  make build-debug       编译本机 debug"
 	@echo "  make build-arm64       交叉编译 arm64 gnu（需 cross）"
 	@echo "  make build-musl        交叉编译 amd64 musl（需 cross）"

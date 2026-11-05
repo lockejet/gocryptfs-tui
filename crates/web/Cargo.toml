@@ -7,3 +7,16 @@ repository.workspace = true
 
 [dependencies]
 gocryptfs-ui-core = { path = "../core" }
+axum = "0.7"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "process", "time", "sync"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rust-embed = { version = "8", features = ["interpolate-folder-path", "mime-guess"] }
+rand = "0.8"
+base64 = "0.22"
+chrono = "0.4"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

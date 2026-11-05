@@ -1,0 +1,39 @@
+# gocryptfs-web 用户级 systemd 单元
+#
+# 安装（用户级，不需要 root）：
+#   mkdir -p ~/.config/systemd/user
+#   cp contrib/systemd/gocryptfs-web.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now gocryptfs-web
+#   systemctl --user status gocryptfs-web
+#
+# 首次启动会生成 token 并打印到 journal：
+#   journalctl --user -u gocryptfs-web -n 20
+#
+# 默认只监听 127.0.0.1:8787；远程访问请用反向代理（TLS 由代理终结），
+# 例如 caddy: `reverse_proxy 127.0.0.1:8787`。
+
+[Unit]
+Description=gocryptfs-web — browser UI for gocryptfs vaults
+Documentation=https://github.com/lockejet/gocryptfs-ui
+After=network.target
+
+[Service]
+Type=simple
+# 必须以「拥有这些加密卷的普通用户」运行（不要用 root）
+ExecStart=%h/.local/bin/gocryptfs-web --listen 127.0.0.1:8787
+Restart=on-failure
+RestartSec=2
+
+# 加固：不提权、私有 /tmp、系统目录只读；/home 保持可写（挂载点通常在家目录下）
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+# 若把配置/数据/状态目录放到别处，把这些路径加进来
+ReadWritePaths=%h/.local/share/gocryptfs-tui %h/.local/state/gocryptfs-tui %h/.config/gocryptfs-tui
+
+[Install]
+WantedBy=default.target
