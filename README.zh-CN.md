@@ -24,6 +24,7 @@
 - [多语言（i18n）](#多语言i18n)
 - [配置](#配置)
 - [使用](#使用)
+  - [Web UI](#web-ui)
 - [日志与历史](#日志与历史)
 - [架构](#架构)
 - [安全设计](#安全设计)
@@ -670,6 +671,62 @@ gocryptfs-tui
 | `Esc` | 关闭 |
 
 ---
+
+### Web UI
+
+`gocryptfs-web` 提供浏览器界面，默认监听 **`http://127.0.0.1:30032`**（仅回环）。
+
+```bash
+gocryptfs-web                       # 默认 127.0.0.1:30032
+gocryptfs-web --listen 127.0.0.1:8080
+```
+
+首次启动会生成 `~/.config/gocryptfs-ui/web.token`（0600），并打印访问 token 与一次性登录二维码。
+
+**登录方式**
+
+| 方式 | 用法 |
+|---|---|
+| Access token | 粘贴启动时打印的 token（`/api/auth/status` 可查是否启用了密码登录） |
+| 用户名 + 密码 | `gocryptfs-web user add alice`（stdin 输入密码）后用「Username & password」标签登录 |
+| TOTP 二次验证（可选） | 安全页开启；备份码只显示一次 |
+| 手机扫码 | 顶栏「手机登录」生成一次性链接（120s、单次有效）；或扫启动时终端打印的二维码 |
+
+**凭证管理**
+
+```bash
+gocryptfs-web token list
+gocryptfs-web token add --label phone --expires 30d    # 明文只打印一次
+gocryptfs-web token revoke phone
+gocryptfs-web user add alice
+gocryptfs-web user passwd alice
+gocryptfs-web user delete alice
+```
+改动**即时生效**（无需重启服务）。
+
+**功能范围**：卷列表与实时挂载状态、挂载/卸载（口令弹窗 + SSE 实时进度）、统一 JSONL 日志、
+生效路径/依赖查看、亮/暗/跟随系统主题、手机自适应布局。**创建/删除加密卷的向导暂未进入 Web UI**，
+请用 TUI/CLI 完成。
+
+**作为服务常驻**（用户级 systemd）：
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp contrib/systemd/gocryptfs-web.service ~/.config/systemd/user/
+systemctl --user daemon-reload && systemctl --user enable --now gocryptfs-web
+```
+
+> 该单元**刻意不带 systemd 沙箱**（`PrivateTmp`/`ProtectSystem`/`NoNewPrivileges` 等）：gocryptfs
+> 的挂载必须位于 host mount namespace，`fusermount` 也需要 setuid 权限。请改在网络层防护：
+> 保持只监听 `127.0.0.1`，远程访问用 TLS 反向代理，例如
+>
+> ```
+> # Caddy
+> https://vaults.example.com { reverse_proxy 127.0.0.1:30032 }
+> ```
+
+**安全默认值**：仅回环监听、token/cookie 会话（`HttpOnly`、`SameSite=Strict`）、写操作 CSRF 头校验、
+CSP/no-sniff/referrer-policy 响应头、口令只经 stdin 传给 `gocryptfs-cli`（不落盘、不入日志）。
 
 ## 日志与历史
 

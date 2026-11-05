@@ -25,6 +25,7 @@ identically and can be used independently. Config/data/state directories live un
 - [Internationalization (i18n)](#internationalization-i18n)
 - [Configuration](#configuration)
 - [Usage](#usage)
+  - [Web UI](#web-ui)
 - [Logging and history](#logging-and-history)
 - [Architecture](#architecture)
 - [Security design](#security-design)
@@ -672,6 +673,66 @@ The UI is divided into 4 focus panes (list / details / directory / output); cycl
 | `Esc` | Close |
 
 ---
+
+### Web UI
+
+`gocryptfs-web` serves a browser UI on **`http://127.0.0.1:30032`** by default (loopback only).
+
+```bash
+gocryptfs-web                       # default 127.0.0.1:30032
+gocryptfs-web --listen 127.0.0.1:8080
+```
+
+On first start it creates `~/.config/gocryptfs-ui/web.token` (0600) and prints the access token
+plus a one-time login QR code.
+
+**Sign-in options**
+
+| Method | How |
+|---|---|
+| Access token | Paste the token printed at startup (`curl -s .../api/auth/status` shows whether password login is available) |
+| Username + password | `gocryptfs-web user add alice` (password on stdin), then use the "Username & password" tab |
+| TOTP 2FA (optional) | Enable it on the Security page; backup codes are shown once |
+| Phone / QR login | "Phone login" in the header generates a one-time link (120 s, single use); or scan the QR printed at startup |
+
+**Managing credentials**
+
+```bash
+gocryptfs-web token list
+gocryptfs-web token add --label phone --expires 30d    # prints the token once
+gocryptfs-web token revoke phone
+gocryptfs-web user add alice
+gocryptfs-web user passwd alice
+gocryptfs-web user delete alice
+```
+Changes are picked up immediately (no restart needed).
+
+**What it can do**: list vaults with live mount state, mount/unmount (passphrase prompt, live
+progress over SSE), browse the unified JSONL log, see effective paths/dependencies, light/dark/
+auto theme, responsive mobile layout. Vault creation/deletion wizards are not in the Web UI yet —
+use the TUI/CLI for those.
+
+**Run as a service** (user unit):
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp contrib/systemd/gocryptfs-web.service ~/.config/systemd/user/
+systemctl --user daemon-reload && systemctl --user enable --now gocryptfs-web
+```
+
+> The unit deliberately ships **without** systemd sandboxing options (no `PrivateTmp`,
+> `ProtectSystem`, `NoNewPrivileges`, ...): gocryptfs mounts must live in the host mount
+> namespace, and `fusermount` needs its setuid helper. Protect it at the network layer instead —
+> keep it on `127.0.0.1` and put a TLS reverse proxy in front for remote access:
+>
+> ```
+> # Caddy
+> https://vaults.example.com { reverse_proxy 127.0.0.1:30032 }
+> ```
+
+**Security defaults**: loopback-only listen, token/cookie sessions (`HttpOnly`, `SameSite=Strict`),
+CSRF header check on writes, CSP/no-sniff/referrer-policy headers, passphrases only travel through
+stdin to `gocryptfs-cli` (never stored or logged).
 
 ## Logging and history
 

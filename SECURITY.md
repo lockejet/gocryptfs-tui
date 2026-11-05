@@ -65,6 +65,26 @@ security responsibility is limited to:
 - When unmounted, writes are blocked via `chmod 555`
 - No reliance on `chattr` (it would block gocryptfs mounts)
 
+### 7. Web UI threat model
+
+The Web UI (`gocryptfs-web`) can mount/unmount vaults, so a stolen session is equivalent to
+control over every configured vault.
+
+- **Loopback by default**: it listens on `127.0.0.1:30032`; binding to a non-loopback address
+  prints a loud warning. Remote access should go through a TLS reverse proxy.
+- **Credentials**: access tokens are random 256-bit secrets stored only as SHA-256 hashes in
+  `web.token` (0600). Password users are stored in `web.auth` (0600) with Argon2id hashes.
+  TOTP secrets and one-time backup codes live in the same file; backup codes are stored hashed
+  and are single-use.
+- **Sessions**: random session ids, `HttpOnly` + `SameSite=Strict` cookies, 12 h TTL; writes
+  require the `x-gfs-csrf: 1` header and a matching `Origin`/`Host`.
+- **Rate limiting**: 5 failed password attempts per minute per (IP, user), then a 15-minute lockout.
+- **Passphrases**: entered in the browser, POSTed over the connection and handed to
+  `gocryptfs-cli` through stdin. They are never stored, logged, or sent back to the client.
+- **Not a file server**: the Web UI manages mount lifecycle; it does not stream plaintext files.
+- **Do not expose it to the internet** without TLS and authentication in front of it; a
+  compromised web session can unmount every vault and mount arbitrary configured vaults.
+
 ## Out of Threat Model
 
 The following are outside this project's protection:
