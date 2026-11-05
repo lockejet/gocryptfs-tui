@@ -8,8 +8,8 @@
 // 注：本文件含有中文断言，故刻意不纳入 tools/i18n_check.py 与
 // `no_hardcoded_cjk_outside_catalogs` 的源码扫描范围。
 
-use crate::i18n::test_support::lock_lang;
 use crate::*;
+use gocryptfs_ui_core::i18n::test_support::lock_lang;
 use ratatui::backend::TestBackend;
 
 fn test_app() -> App {

@@ -214,15 +214,32 @@ dependencies = [
 ]
 
 [[package]]
-name = "gocryptfs-tui"
+name = "gocryptfs-ui-core"
+version = "0.6.1"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "gocryptfs-ui-tui"
 version = "0.6.1"
 dependencies = [
  "chrono",
  "crossterm",
  "dirs",
+ "gocryptfs-ui-core",
  "ratatui",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "gocryptfs-ui-web"
+version = "0.6.1"
+dependencies = [
+ "gocryptfs-ui-core",
 ]
 
 [[package]]

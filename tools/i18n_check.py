@@ -201,8 +201,8 @@ def main():
     if selftest_error:
         print(f'FAIL: 校验器自检未通过（{selftest_error}）')
         sys.exit(1)
-    zh = dict(parse_table(os.path.join(root, 'src/i18n/zh_cn.rs')))
-    en = dict(parse_table(os.path.join(root, 'src/i18n/en_us.rs')))
+    zh = dict(parse_table(os.path.join(root, 'crates/core/src/i18n/zh_cn.rs')))
+    en = dict(parse_table(os.path.join(root, 'crates/core/src/i18n/en_us.rs')))
     errors = []
 
     if list(zh) != sorted(zh):
@@ -219,7 +219,7 @@ def main():
         if n_zh != n_en:
             errors.append(f'{key}: zh 有 {n_zh} 个占位符，en 有 {n_en} 个')
 
-    for path in ('src/main.rs', 'src/cli.rs'):
+    for path in ('crates/tui/src/main.rs', 'crates/tui/src/cli.rs'):
         full = os.path.join(root, path)
         src = open(full, encoding='utf-8').read()
         for line, macro, key, args in extract_calls(src):

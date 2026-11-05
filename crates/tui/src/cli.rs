@@ -10,7 +10,7 @@
 //   - 不接受位置参数
 //   - 错误以结构化形式返回，由调用方按最终语言渲染（见 `CliError::render`）
 
-use crate::i18n::Lang;
+use gocryptfs_ui_core::i18n::Lang;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -393,11 +393,11 @@ mod tests {
     #[test]
     fn test_error_render_uses_current_language() {
         // 默认语言为简体中文；文案与 i18n 表中的渲染结果一致
-        let _guard = crate::i18n::test_support::lock_lang();
+        let _guard = gocryptfs_ui_core::i18n::test_support::lock_lang();
         let r = parse(args(&["--bogus"]));
         let msg = r.error.unwrap().render();
-        let expected = crate::i18n::trf_in(
-            crate::i18n::DEFAULT_LANG,
+        let expected = gocryptfs_ui_core::i18n::trf_in(
+            gocryptfs_ui_core::i18n::DEFAULT_LANG,
             "cli.unknown_arg",
             &["--bogus".to_string()],
         );

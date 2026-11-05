@@ -139,9 +139,10 @@ check "--local 强制本地模式" "1" "$v"
 
 # 6.3 源码树里没有产物也没有 cargo → 自动回退 Release（不再因缺 cargo 失败）
 FAKEREPO="$TMP/fakerepo"
-mkdir -p "$FAKEREPO/src"
+mkdir -p "$FAKEREPO/src" "$FAKEREPO/shell"
 : > "$FAKEREPO/Cargo.toml"
 : > "$FAKEREPO/src/main.rs"
+: > "$FAKEREPO/shell/gocryptfs-cli"   # 源码树标记（install.sh 布局无关判定）
 cp "$INSTALL" "$FAKEREPO/install.sh"
 out="$(cd "$FAKEREPO" && env PATH=/usr/bin:/bin GOCRYPTFS_TUI_REPO=nonexistent/none sh ./install.sh --prefix "$TMP/fallback" 2>&1 || true)"
 case "$out" in *"using the Release binary"*) v=1 ;; *) v=0 ;; esac

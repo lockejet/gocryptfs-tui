@@ -1,11 +1,15 @@
 #![allow(dead_code)]
 
 #[macro_use]
-mod i18n;
-mod backend;
+extern crate gocryptfs_ui_core;
+
 mod cli;
-mod deps;
-mod logger;
+
+use gocryptfs_ui_core::{backend, deps, i18n, logger};
+use gocryptfs_ui_core::{
+    short_version, version_line, version_string, APP_BUILD_TIME, APP_COMMIT, APP_NAME, APP_VERSION,
+    CLI_NAME,
+};
 
 use crossterm::{
     event::{
@@ -33,27 +37,8 @@ use std::time::{Duration, Instant};
 
 use logger::{LogEntry, LogKind, LogLevel, Logger};
 
-const APP_NAME: &str = env!("CARGO_PKG_NAME");
-const CLI_NAME: &str = "gocryptfs-cli";
 const MAX_OUTPUT: usize = 500;
 const MAX_HISTORY_DISPLAY: usize = 40;
-
-const APP_VERSION: &str = env!("APP_VERSION");
-const APP_COMMIT: &str = env!("APP_COMMIT");
-const APP_BUILD_TIME: &str = env!("APP_BUILD_TIME");
-
-fn version_string() -> String {
-    format!("{} ({}, {})", APP_VERSION, APP_COMMIT, APP_BUILD_TIME)
-}
-
-/// 版本串（写进内嵌后端的 VERSION 文件，供 `gocryptfs-cli --version` 使用）
-fn version_line() -> String {
-    version_string()
-}
-
-fn short_version() -> String {
-    APP_VERSION.to_string()
-}
 
 // ============================================================
 // 配置文件读值

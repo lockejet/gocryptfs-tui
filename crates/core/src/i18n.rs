@@ -298,7 +298,6 @@ pub fn keys() -> impl Iterator<Item = &'static str> {
 }
 
 /// 测试辅助：需要读写全局语言的测试必须持有 `LANG_LOCK`，避免并行测试互相干扰。
-#[cfg(test)]
 pub mod test_support {
     use super::{set_lang, Lang, DEFAULT_LANG};
     use std::sync::{Mutex, MutexGuard};
@@ -670,8 +669,8 @@ mod tests {
         }
 
         let sources = [
-            ("main.rs", include_str!("main.rs")),
-            ("cli.rs", include_str!("cli.rs")),
+            ("main.rs", include_str!("../../tui/src/main.rs")),
+            ("cli.rs", include_str!("../../tui/src/cli.rs")),
         ];
         let mut missing: Vec<String> = Vec::new();
         let mut total = 0usize;
@@ -696,8 +695,8 @@ mod tests {
     #[test]
     fn no_hardcoded_cjk_outside_catalogs() {
         let sources = [
-            ("main.rs", include_str!("main.rs")),
-            ("cli.rs", include_str!("cli.rs")),
+            ("main.rs", include_str!("../../tui/src/main.rs")),
+            ("cli.rs", include_str!("../../tui/src/cli.rs")),
         ];
         let mut bad: Vec<String> = Vec::new();
         for (name, src) in sources {

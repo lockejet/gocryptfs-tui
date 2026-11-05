@@ -1,0 +1,13 @@
+[package]
+name = "gocryptfs-ui-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "gocryptfs-web"
+path = "src/main.rs"
+
+[dependencies]
+gocryptfs-ui-core = { path = "../core" }

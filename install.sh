@@ -214,7 +214,9 @@ fi
 # ---- 模式自动判断 ----
 # curl|sh 时没有源码树（$0 也不是可读文件），必须走 Release；否则在源码目录里就本地编译。
 IN_REPO=0
-if [ -f Cargo.toml ] && [ -f src/main.rs ] && [ -f "$0" ] && [ -r "$0" ]; then
+# 源码树判定：workspace 根 Cargo.toml + shell 后端（对目录布局变化免疫：
+# src/main.rs、crates/tui/src/main.rs 都能识别）
+if [ -f Cargo.toml ] && [ -f shell/gocryptfs-cli ] && [ -f "$0" ] && [ -r "$0" ]; then
     IN_REPO=1
 fi
 if [ -z "$MODE" ]; then

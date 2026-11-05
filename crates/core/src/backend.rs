@@ -16,9 +16,9 @@ use std::process::Command;
 use std::sync::OnceLock;
 
 /// 内嵌的后端脚本（与二进制同版本、同源码）
-pub const CLI_SCRIPT: &str = include_str!("../shell/gocryptfs-cli");
-pub const LIB_SCRIPT: &str = include_str!("../shell/lib/gocryptfs-lib.sh");
-pub const I18N_SCRIPT: &str = include_str!("../shell/lib/i18n.sh");
+pub const CLI_SCRIPT: &str = include_str!("../../../shell/gocryptfs-cli");
+pub const LIB_SCRIPT: &str = include_str!("../../../shell/lib/gocryptfs-lib.sh");
+pub const I18N_SCRIPT: &str = include_str!("../../../shell/lib/i18n.sh");
 
 /// 版本文件（`gocryptfs-cli --version` 读取同目录的 VERSION）
 pub const VERSION_FILE: &str = "VERSION";
