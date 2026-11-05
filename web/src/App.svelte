@@ -166,6 +166,18 @@
     }
   }
 
+  // 服务器上执行 `gocryptfs-web user add <name>` 后无需重启：重新拉取状态即可
+  async function recheckAuth() {
+    try {
+      authStatus = await api.authStatus();
+      loginError = authStatus.password_auth
+        ? ''
+        : 'Still no password users. Run `gocryptfs-web user add <name>` on the server.';
+    } catch (e) {
+      loginError = 'Cannot reach the server.';
+    }
+  }
+
   function normalizeVault(v) {
     if (typeof v === 'string') return { name: v, mountPoint: '', mounted: false };
     const mounted =
@@ -705,6 +717,14 @@
   <main class="login-wrap">
     <form class="card login" on:submit|preventDefault={submitLogin}>
       <h1>gocryptfs-ui</h1>
+
+      {#if !showPasswordTab}
+        <p class="muted small-text">
+          Username / password sign-in is disabled because no user exists yet. On the server run
+          <code>gocryptfs-web user add &lt;name&gt;</code> (takes effect immediately), then
+          <button type="button" class="link-btn" on:click={recheckAuth}>check again</button>.
+        </p>
+      {/if}
 
       {#if showPasswordTab && authStatus.token_auth}
         <div class="seg" role="tablist" aria-label="Sign-in method">

@@ -67,6 +67,12 @@ pub struct AppState {
     pub users: Arc<Mutex<auth::AuthStore>>,
     /// `web.auth` 路径（CLI 与 HTTP 共用）。
     pub auth_path: PathBuf,
+    /// token 文件路径（CLI 与 HTTP 共用，用于热加载）。
+    pub token_path: PathBuf,
+    /// 上次加载 `web.auth` 的 mtime（CLI 改用户后自动热加载）。
+    pub auth_mtime: Arc<Mutex<Option<std::time::SystemTime>>>,
+    /// 上次加载 token 文件的 mtime。
+    pub token_mtime: Arc<Mutex<Option<std::time::SystemTime>>>,
     /// 对外可访问的基址，例如 `http://127.0.0.1:30032`。
     pub listen_url: String,
     /// 一次性登录 nonce → 签发时间。
@@ -85,7 +91,36 @@ pub struct AppState {
     pub next_job_id: Arc<AtomicU64>,
 }
 
+/// 文件 mtime（不存在则 None），用于判断 `web.auth`/token 文件是否被 CLI 改动。
+fn file_mtime(path: &Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).ok().and_then(|m| m.modified().ok())
+}
+
 impl AppState {
+    /// 热加载：CLI（`user add` / `token add` 等）改动文件后，无需重启即可生效。
+    pub fn reload_auth_if_changed(&self) {
+        let auth_stamp = file_mtime(&self.auth_path);
+        {
+            let mut last = self.auth_mtime.lock().unwrap();
+            if *last != auth_stamp {
+                if let Ok(store) = auth::load_auth_store(&self.auth_path) {
+                    *self.users.lock().unwrap() = store;
+                }
+                *last = auth_stamp;
+            }
+        }
+        let token_stamp = file_mtime(&self.token_path);
+        {
+            let mut last = self.token_mtime.lock().unwrap();
+            if *last != token_stamp {
+                if let Ok((store, _)) = auth::load_token_store(&self.token_path) {
+                    *self.tokens.lock().unwrap() = store;
+                }
+                *last = token_stamp;
+            }
+        }
+    }
+
     pub fn new(
         token: String,
         config: String,
@@ -112,10 +147,14 @@ impl AppState {
     ) -> Self {
         let log_path = state_dir.join("app.log.jsonl");
         let auth_path = state_dir.join("web.auth");
+        let token_path = PathBuf::new();
         Self {
             tokens: Arc::new(Mutex::new(store)),
             users: Arc::new(Mutex::new(auth::AuthStore::default())),
             auth_path,
+            token_path,
+            auth_mtime: Arc::new(Mutex::new(None)),
+            token_mtime: Arc::new(Mutex::new(None)),
             listen_url: format!("http://{DEFAULT_LISTEN}"),
             nonces: Arc::new(Mutex::new(HashMap::new())),
             rate_limiter: Arc::new(Mutex::new(auth::RateLimiter::default())),
@@ -518,6 +557,7 @@ async fn login(
     conn: Option<ConnectInfo<SocketAddr>>,
     Json(body): Json<LoginRequest>,
 ) -> Response {
+    state.reload_auth_if_changed();
     if let Some(token) = body.token.as_deref() {
         if state.tokens.lock().unwrap().verify(token) {
             // 兼容既有日志测试：token 登录成功不写入 app.log.jsonl，
@@ -595,6 +635,7 @@ async fn login_links(State(state): State<AppState>, headers: HeaderMap) -> Respo
 }
 
 async fn auth_status(State(state): State<AppState>) -> Response {
+    state.reload_auth_if_changed();
     let password_auth = !state.users.lock().unwrap().is_empty();
     Json(json!({
         "token_auth": true,
@@ -1697,7 +1738,10 @@ fn serve(
     let mut state =
         AppState::with_token_store(token_store, config, data_dir, data_overridden, state_dir);
     state.auth_path = auth_path;
+    state.token_path = token_path.clone();
     state.users = Arc::new(Mutex::new(users));
+    *state.auth_mtime.lock().unwrap() = file_mtime(&state.auth_path);
+    *state.token_mtime.lock().unwrap() = file_mtime(&state.token_path);
     state.listen_url = format!("http://{addr}");
 
     println!("gocryptfs-web {}", core::version_string());
