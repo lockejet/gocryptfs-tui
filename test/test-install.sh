@@ -176,6 +176,35 @@ out="$(sh "$INSTALL" --bogus 2>&1 || true)"
 case "$out" in *"unknown argument"*) v=1 ;; *) v=0 ;; esac
 check "未知参数报错" "1" "$v"
 
+# ---- 7b. Release 安装路径（本地目录镜像，离线可测）：新资产名 + 双二进制 + 后端 ----
+DIST="$TMP/distrib"
+mkdir -p "$DIST/stage/gocryptfs-ui-x86_64-unknown-linux-gnu"
+cp "$BIN" "$DIST/stage/gocryptfs-ui-x86_64-unknown-linux-gnu/gocryptfs-tui"
+cp "$PROJECT_ROOT/target/release/gocryptfs-web" "$DIST/stage/gocryptfs-ui-x86_64-unknown-linux-gnu/gocryptfs-web"
+( cd "$DIST/stage" && tar -cJf "../gocryptfs-ui-x86_64-unknown-linux-gnu.tar.xz" gocryptfs-ui-x86_64-unknown-linux-gnu )
+( cd "$DIST" && sha256sum gocryptfs-ui-x86_64-unknown-linux-gnu.tar.xz > gocryptfs-ui-x86_64-unknown-linux-gnu.tar.xz.sha256 )
+( cd "$PROJECT_ROOT" && git archive --format=tar.gz HEAD > "$DIST/source.tar.gz" )
+( cd "$DIST" && sha256sum source.tar.gz > source.tar.gz.sha256 )
+
+P6="$TMP/release-mode"
+out="$(sh "$INSTALL" --from-release --release-base "$DIST" --prefix "$P6" --no-deps-check 2>&1)"
+check "Release 模式: sha256 校验通过" "yes" \
+    "$(printf '%s' "$out" | grep -q 'sha256 verified' && echo yes || echo no)"
+check "Release 模式: TUI 已安装" "yes" "$(exists "$P6/bin/gocryptfs-tui")"
+check "Release 模式: Web 已安装" "yes" "$(exists "$P6/bin/gocryptfs-web")"
+check "Release 模式: 独立后端已安装" "yes" "$(exists "$P6/lib/gocryptfs-tui/gocryptfs-cli")"
+
+# 旧资产前缀回退：只有 gocryptfs-tui-*.tar.xz 时也能装
+DIST_OLD="$TMP/distrib-old"
+mkdir -p "$DIST_OLD/stage/gocryptfs-tui-x86_64-unknown-linux-gnu"
+cp "$BIN" "$DIST_OLD/stage/gocryptfs-tui-x86_64-unknown-linux-gnu/gocryptfs-tui"
+( cd "$DIST_OLD/stage" && tar -cJf "../gocryptfs-tui-x86_64-unknown-linux-gnu.tar.xz" gocryptfs-tui-x86_64-unknown-linux-gnu )
+( cd "$DIST_OLD" && sha256sum gocryptfs-tui-x86_64-unknown-linux-gnu.tar.xz > gocryptfs-tui-x86_64-unknown-linux-gnu.tar.xz.sha256 )
+cp "$DIST/source.tar.gz" "$DIST/source.tar.gz.sha256" "$DIST_OLD/"
+P7="$TMP/release-old"
+sh "$INSTALL" --from-release --release-base "$DIST_OLD" --prefix "$P7" --no-deps-check >/dev/null 2>&1
+check "旧资产前缀回退可安装" "yes" "$(exists "$P7/bin/gocryptfs-tui")"
+
 # ---- 8. 输出必须全英文（提示不随 locale 变化）----
 out="$(sh "$INSTALL" --help 2>&1)"
 if printf '%s' "$out" | LC_ALL=C grep -qP '\p{Han}'; then v=0; else v=1; fi

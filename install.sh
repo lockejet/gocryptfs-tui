@@ -48,7 +48,7 @@ Mode and uninstall:
   ./install.sh --no-link-cli           never link, even with --system
   ./install.sh --no-deps-check         skip the post-install dependency check
   ./install.sh --no-web                install only the TUI (skip gocryptfs-web)
-  ./install.sh --release-base URL      use a mirror/test directory for Release assets
+  ./install.sh --release-base PATH     use a local directory or https mirror for Release assets
 
   # no source/toolchain needed (GitHub Release asset):
   curl -LsSf https://github.com/lockejet/gocryptfs-ui/releases/latest/download/gocryptfs-ui-install.sh \
@@ -141,15 +141,24 @@ trap cleanup EXIT
 # ------------------------------------------------------------
 have() { command -v "$1" >/dev/null 2>&1; }
 
-download() { # download <url> <dest>
-    if have curl; then
-        curl -fsSL --proto '=https' --tlsv1.2 -o "$2" "$1"
-    elif have wget; then
-        wget -qO "$2" "$1"
-    else
-        echo "[!] --from-release requires curl or wget" >&2
-        return 1
-    fi
+download() { # download <url-or-path> <dest>
+    case "$1" in
+        https://*)
+            if have curl; then
+                curl -fsSL --proto '=https' --tlsv1.2 -o "$2" "$1"
+            elif have wget; then
+                wget -qO "$2" "$1"
+            else
+                echo "[!] --from-release requires curl or wget" >&2
+                return 1
+            fi ;;
+        http://*)
+            echo "[!] plain http is not allowed; use https:// or a local directory" >&2
+            return 1 ;;
+        *)
+            # 本地目录镜像（离线/内网/测试）：--release-base /path/to/assets
+            cp -f "$1" "$2" 2>/dev/null ;;
+    esac
 }
 
 json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
