@@ -218,6 +218,7 @@ name = "gocryptfs-ui-core"
 version = "0.6.1"
 dependencies = [
  "chrono",
+ "dirs",
  "serde",
  "serde_json",
 ]

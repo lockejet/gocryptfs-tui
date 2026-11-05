@@ -5,7 +5,10 @@ extern crate gocryptfs_ui_core;
 
 mod cli;
 
+use gocryptfs_ui_core::protocol::CliEvent;
+use gocryptfs_ui_core::vaults::{HistoryEntry, Vault};
 use gocryptfs_ui_core::{backend, deps, i18n, logger};
+use gocryptfs_ui_core::{config, paths, protocol, vaults};
 use gocryptfs_ui_core::{
     short_version, version_line, version_string, APP_BUILD_TIME, APP_COMMIT, APP_NAME, APP_VERSION,
     CLI_NAME,
@@ -26,7 +29,6 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
     Frame, Terminal,
 };
-use serde::Deserialize;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -41,73 +43,8 @@ const MAX_OUTPUT: usize = 500;
 const MAX_HISTORY_DISPLAY: usize = 40;
 
 // ============================================================
-// 配置文件读值
-// ============================================================
-
-fn read_setting(config: &str, key: &str, default: &str) -> String {
-    if let Ok(content) = std::fs::read_to_string(config) {
-        for line in content.lines() {
-            let t = line.trim_start();
-            if let Some(rest) = t.strip_prefix(&format!("{}:", key)) {
-                let v = rest.trim().trim_matches('"').trim_matches('\'');
-                if !v.is_empty() {
-                    return v.to_string();
-                }
-            }
-        }
-    }
-    default.to_string()
-}
-
-// ============================================================
 // 数据模型
 // ============================================================
-
-fn default_valid() -> bool {
-    true
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct Vault {
-    id: u32,
-    name: String,
-    path: String,
-    mount_point: String,
-    mounted: bool,
-    locked: bool,
-    #[serde(default = "default_valid")]
-    valid: bool,
-}
-
-#[derive(Debug, Deserialize)]
-struct CliListResponse {
-    status: String,
-    data: CliListData,
-}
-
-#[derive(Debug, Deserialize)]
-struct CliListData {
-    vaults: Vec<Vault>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct HistoryEntry {
-    ts: String,
-    #[serde(default)]
-    src: String,
-    #[serde(default)]
-    action: String,
-    #[serde(default, alias = "name")]
-    target: String,
-    #[serde(default, alias = "status")]
-    result: String,
-    #[serde(default)]
-    detail: String,
-    #[serde(default)]
-    pid: Option<u32>,
-    #[serde(default)]
-    duration_ms: Option<u64>,
-}
 
 #[derive(Debug, Clone, Default)]
 struct HistoryFilter {
@@ -160,43 +97,6 @@ impl HistoryFilter {
 // CLI 交互
 // ============================================================
 
-/// 后端路径优先级：`GOCRYPTFS_CLI` > 内嵌释放副本 > PATH 中的 `gocryptfs-cli`。
-fn cli_path_from(env: Option<&str>, embedded: Option<&str>) -> String {
-    if let Some(v) = env {
-        if !v.trim().is_empty() {
-            return v.to_string();
-        }
-    }
-    match embedded {
-        Some(p) => p.to_string(),
-        None => CLI_NAME.to_string(),
-    }
-}
-
-fn cli_path() -> String {
-    let env = std::env::var("GOCRYPTFS_CLI").ok();
-    let embedded = backend::embedded_path().map(|p| p.to_string_lossy().to_string());
-    cli_path_from(env.as_deref(), embedded.as_deref())
-}
-
-/// CLI 的实际路径：便于发现「调用到了旧的已安装后端」这类问题
-/// （例如 /usr/local/bin 里的旧 gocryptfs-cli 不认识 GOCRYPTFS_LANG）。
-fn resolved_cli_path() -> String {
-    let cli = cli_path();
-    if cli.contains('/') {
-        return cli;
-    }
-    if let Some(path) = std::env::var_os("PATH") {
-        for dir in std::env::split_paths(&path) {
-            let candidate = dir.join(&cli);
-            if candidate.is_file() {
-                return candidate.to_string_lossy().to_string();
-            }
-        }
-    }
-    cli
-}
-
 /// 探测 CLI 是否支持 `--lang`（新版 Shell 后端支持；旧版安装不认识，
 /// 会导致英文界面下输出区仍是中文）。探测失败时返回 true，避免误报。
 fn cli_supports_lang(cli: &str) -> bool {
@@ -210,254 +110,6 @@ fn cli_supports_lang(cli: &str) -> bool {
     }
 }
 
-/// 展开 `~` 并把相对路径转成绝对路径（不解析符号链接，保持用户可预期）。
-/// 用于顶栏/帮助里展示配置与数据目录：`-c demo.yaml` 也应显示完整路径。
-fn absolute_path(path: &str) -> String {
-    if path.is_empty() {
-        return String::new();
-    }
-    let expanded = if path == "~" || path.starts_with("~/") {
-        let rest = path.strip_prefix("~/").unwrap_or("");
-        match std::env::var_os("HOME") {
-            Some(home) => PathBuf::from(home).join(rest),
-            None => PathBuf::from(path),
-        }
-    } else {
-        PathBuf::from(path)
-    };
-    if expanded.is_absolute() {
-        return expanded.to_string_lossy().to_string();
-    }
-    match std::env::current_dir() {
-        Ok(cwd) => cwd.join(expanded).to_string_lossy().to_string(),
-        Err(_) => expanded.to_string_lossy().to_string(),
-    }
-}
-
-fn resolve_config(cli_opt: Option<PathBuf>) -> String {
-    let raw = if let Some(p) = cli_opt {
-        p.to_string_lossy().to_string()
-    } else if let Some(p) = backend_config_path() {
-        p
-    } else if let Some(cfg) = dirs::config_dir() {
-        // dirs::config_dir() 已遵循 $XDG_CONFIG_HOME，其次才是 ~/.config
-        cfg.join(APP_NAME)
-            .join("config.yaml")
-            .to_string_lossy()
-            .to_string()
-    } else if let Some(home) = std::env::var_os("HOME") {
-        PathBuf::from(home)
-            .join(".config")
-            .join(APP_NAME)
-            .join("config.yaml")
-            .to_string_lossy()
-            .to_string()
-    } else {
-        String::new()
-    };
-    absolute_path(&raw)
-}
-
-/// 问 Shell 后端要配置路径（`gocryptfs-cli config`），失败返回 None。
-fn backend_config_path() -> Option<String> {
-    let o = backend::cli_command(&cli_path())
-        .arg("config")
-        .output()
-        .ok()?;
-    if !o.status.success() {
-        return None;
-    }
-    let p = String::from_utf8_lossy(&o.stdout).trim().to_string();
-    if p.is_empty() {
-        None
-    } else {
-        Some(p)
-    }
-}
-
-fn resolve_data_dir(cli_opt: Option<PathBuf>) -> PathBuf {
-    let raw = if let Some(p) = cli_opt {
-        p
-    } else if let Some(d) = dirs::data_local_dir() {
-        d.join(APP_NAME)
-    } else if let Some(home) = std::env::var_os("HOME") {
-        PathBuf::from(home).join(".local/share").join(APP_NAME)
-    } else {
-        PathBuf::from("/tmp").join(APP_NAME)
-    };
-    PathBuf::from(absolute_path(&raw.to_string_lossy()))
-}
-
-/// 运行期状态目录（日志/历史）。
-///
-/// 默认遵循 XDG：`$XDG_STATE_HOME/gocryptfs-tui`（通常是 `~/.local/state/gocryptfs-tui`）。
-/// 显式指定数据目录（`-D` / `GOCRYPTFS_DATA_DIR`）时与数据目录合并——便于
-/// `-D /tmp/dbg` 这类隔离调试把所有运行期文件放在同一处，也保持旧行为不变。
-fn resolve_state_dir(data_dir: &Path, data_overridden: bool) -> PathBuf {
-    if let Some(p) = std::env::var_os("GOCRYPTFS_STATE_DIR") {
-        return PathBuf::from(absolute_path(&p.to_string_lossy()));
-    }
-    if data_overridden {
-        return data_dir.to_path_buf();
-    }
-    match dirs::state_dir() {
-        Some(d) => d.join(APP_NAME),
-        None => data_dir.to_path_buf(),
-    }
-}
-
-/// 旧布局（日志/历史在数据目录）→ 状态目录的一次性迁移；新路径优先，失败则保留旧文件。
-fn migrate_runtime_files(data_dir: &Path, state_dir: &Path) {
-    if data_dir == state_dir {
-        return;
-    }
-    for name in ["app.log.jsonl", "history.jsonl"] {
-        let src = data_dir.join(name);
-        let dst = state_dir.join(name);
-        if src.exists() && !dst.exists() {
-            move_into(&src, &dst);
-        }
-    }
-    // 轮转日志 app.log.jsonl.1 … .N
-    if let Ok(entries) = std::fs::read_dir(data_dir) {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if !name.starts_with("app.log.jsonl.") {
-                continue;
-            }
-            let dst = state_dir.join(&name);
-            if !dst.exists() {
-                move_into(&entry.path(), &dst);
-            }
-        }
-    }
-}
-
-fn move_into(src: &Path, dst: &Path) {
-    if std::fs::rename(src, dst).is_ok() {
-        return;
-    }
-    if std::fs::copy(src, dst).is_ok() {
-        let _ = std::fs::remove_file(src);
-    }
-}
-
-fn load_vaults(config: &str) -> Result<Vec<Vault>, String> {
-    if config.is_empty() {
-        return Err(t!("cli.error.config_empty").to_string());
-    }
-    let out = backend::cli_command(&cli_path())
-        .args(["-c", config, "list", "--json"])
-        .output()
-        .map_err(|e| t!("cli.error.exec_failed", e))?;
-    if !out.status.success() {
-        return Err(t!(
-            "cli.error.cli_failed",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
-    }
-    let resp: CliListResponse =
-        serde_json::from_slice(&out.stdout).map_err(|e| t!("cli.error.json_parse", e))?;
-    if resp.status != "ok" {
-        return Err(t!("cli.error.bad_status").to_string());
-    }
-    Ok(resp.data.vaults)
-}
-
-fn load_history(log_file: &Path) -> Vec<HistoryEntry> {
-    let content = match std::fs::read_to_string(log_file) {
-        Ok(c) => c,
-        Err(_) => return Vec::new(),
-    };
-    content
-        .lines()
-        .filter_map(|line| serde_json::from_str::<HistoryEntry>(line).ok())
-        .collect()
-}
-
-fn migrate_old_history(data_dir: &Path) {
-    let old = data_dir.join("history.jsonl");
-    let new = data_dir.join("app.log.jsonl");
-
-    if !old.exists() {
-        return;
-    }
-
-    let old_content = match std::fs::read_to_string(&old) {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-
-    let mut new_lines = String::new();
-    for line in old_content.lines() {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
-            let ts = v.get("ts").and_then(|x| x.as_str()).unwrap_or("");
-            let action = v.get("action").and_then(|x| x.as_str()).unwrap_or("");
-            let name = v.get("name").and_then(|x| x.as_str()).unwrap_or("");
-            let status = v.get("status").and_then(|x| x.as_str()).unwrap_or("");
-            let detail = v.get("detail").and_then(|x| x.as_str()).unwrap_or("");
-
-            let new_entry = serde_json::json!({
-                "ts": ts,
-                "src": "cli",
-                "action": action,
-                "target": name,
-                "result": status,
-                "detail": detail,
-                "pid": null,
-                "duration_ms": null,
-            });
-
-            if let Ok(s) = serde_json::to_string(&new_entry) {
-                new_lines.push_str(&s);
-                new_lines.push('\n');
-            }
-        }
-    }
-
-    use std::io::Write as _;
-    if new.exists() {
-        if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&new) {
-            let _ = f.write_all(new_lines.as_bytes());
-        }
-    } else if std::fs::write(&new, &new_lines).is_err() {
-        return;
-    }
-
-    let _ = std::fs::remove_file(&old);
-}
-
-#[derive(Debug)]
-enum CliEvent {
-    Pid(u32),
-    Stdout(String),
-    Stderr(String),
-    Progress { pct: u8, done: u64, total: u64 },
-    Check { key: String, value: String },
-    Done(i32),
-}
-
-fn parse_protocol_line(line: &str) -> Option<CliEvent> {
-    if let Some(rest) = line.strip_prefix("@@PROGRESS@@ ") {
-        let parts: Vec<&str> = rest.split_whitespace().collect();
-        if parts.len() >= 3 {
-            let pct = parts[0].parse::<u8>().ok()?;
-            let done = parts[1].parse::<u64>().unwrap_or(0);
-            let total = parts[2].parse::<u64>().unwrap_or(0);
-            return Some(CliEvent::Progress { pct, done, total });
-        }
-    } else if let Some(rest) = line.strip_prefix("@@CHECK@@ ") {
-        let parts: Vec<&str> = rest.splitn(2, ' ').collect();
-        if parts.len() == 2 {
-            return Some(CliEvent::Check {
-                key: parts[0].to_string(),
-                value: parts[1].to_string(),
-            });
-        }
-    }
-    None
-}
-
 fn spawn_cli_task(
     args: Vec<String>,
     password: Option<String>,
@@ -466,7 +118,7 @@ fn spawn_cli_task(
 ) -> Receiver<CliEvent> {
     // 把当前界面语言传给 Shell 后端，保证 CLI 输出与 TUI 一致
     spawn_cli_task_with(
-        &cli_path(),
+        &paths::cli_path(),
         i18n::lang().code(),
         args,
         password,
@@ -518,7 +170,7 @@ fn spawn_cli_task_with(
         let tx_err = tx.clone();
         let h_err = thread::spawn(move || {
             for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                if let Some(evt) = parse_protocol_line(&line) {
+                if let Some(evt) = protocol::parse_protocol_line(&line) {
                     if tx_err.send(evt).is_err() {
                         break;
                     }
@@ -531,7 +183,7 @@ fn spawn_cli_task_with(
         let tx_out = tx.clone();
         let h_out = thread::spawn(move || {
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                if let Some(evt) = parse_protocol_line(&line) {
+                if let Some(evt) = protocol::parse_protocol_line(&line) {
                     if tx_out.send(evt).is_err() {
                         break;
                     }
@@ -790,11 +442,11 @@ impl App {
         history_file: PathBuf,
         help_file: PathBuf,
     ) -> Self {
-        let level_str = read_setting(&config, "logging.level", "operation");
-        let max_size: u64 = read_setting(&config, "logging.max_size", "5242880")
+        let level_str = config::read_setting(&config, "logging.level", "operation");
+        let max_size: u64 = config::read_setting(&config, "logging.max_size", "5242880")
             .parse()
             .unwrap_or(5 * 1024 * 1024);
-        let max_files: usize = read_setting(&config, "logging.max_files", "3")
+        let max_files: usize = config::read_setting(&config, "logging.max_files", "3")
             .parse()
             .unwrap_or(3);
         let logger = Logger::new(
@@ -842,7 +494,11 @@ impl App {
         };
         app.add_output(t!("output.started", APP_NAME, short_version()));
         // 打印解析后的实际路径：便于发现调用到了旧的已安装后端
-        app.add_output(format!("{}{}", t!("common.cli"), resolved_cli_path()));
+        app.add_output(format!(
+            "{}{}",
+            t!("common.cli"),
+            paths::resolved_cli_path()
+        ));
         // 内嵌后端释放失败：给出可操作提示（此时会回退到 PATH 中的后端）
         if let Some(err) = backend::error() {
             app.add_output(t!(
@@ -860,7 +516,7 @@ impl App {
             }
         }
         // 英文界面 + 旧版后端（不认识 --lang）时提示一次，否则输出区会残留中文
-        if i18n::lang() != i18n::DEFAULT_LANG && !cli_supports_lang(&cli_path()) {
+        if i18n::lang() != i18n::DEFAULT_LANG && !cli_supports_lang(&paths::cli_path()) {
             app.add_output(t!("output.cli_lang_unsupported").to_string());
         }
         app.add_output(t!(
@@ -873,7 +529,7 @@ impl App {
         ));
 
         if !app.config.is_empty() {
-            match load_vaults(&config) {
+            match vaults::load_vaults(&config) {
                 Ok(vaults) => {
                     let n = vaults.len();
                     app.vaults = vaults;
@@ -949,7 +605,7 @@ impl App {
         if self.config.is_empty() {
             return;
         }
-        match load_vaults(&self.config) {
+        match vaults::load_vaults(&self.config) {
             Ok(vaults) => {
                 self.load_error = None;
                 self.vaults = vaults;
@@ -1385,7 +1041,7 @@ impl App {
         }
         let action = kind.action();
         let desc = kind.label();
-        self.add_output(t!("output.exec", cli_path(), args.join(" ")));
+        self.add_output(t!("output.exec", paths::cli_path(), args.join(" ")));
         self.status = t!("status.running", &desc);
 
         self.logger.log(
@@ -1544,7 +1200,8 @@ impl App {
             name
         );
         let tmp_mount = format!("{}.mount_tmp", source);
-        let keep_source_cfg = read_setting(&self.config, "create.keep_source", "false") == "true";
+        let keep_source_cfg =
+            config::read_setting(&self.config, "create.keep_source", "false") == "true";
 
         self.pending_confirmed = None;
         self.wizard = Some(Wizard {
@@ -1589,9 +1246,9 @@ impl App {
             )));
             return;
         }
-        let restore_cfg = read_setting(&self.config, "remove.restore", "true") == "true";
+        let restore_cfg = config::read_setting(&self.config, "remove.restore", "true") == "true";
         let delete_cipher_cfg =
-            read_setting(&self.config, "remove.direct_delete_cipher", "false") == "true";
+            config::read_setting(&self.config, "remove.direct_delete_cipher", "false") == "true";
 
         self.vault_confirmed = None;
         self.wizard = Some(Wizard {
@@ -1802,7 +1459,7 @@ impl App {
             "commit" => APP_COMMIT,
             "build" => APP_BUILD_TIME,
             "repo" => repo,
-            "cli" => cli_path(),
+            "cli" => paths::cli_path(),
             "cfg" => self.config.clone(),
             "data" => self.data_dir.display().to_string(),
             "log" => self.log_file.display().to_string(),
@@ -2124,7 +1781,7 @@ fn handle_key(app: &mut App, key: KeyCode, mods: KeyModifiers) {
             return;
         }
         KeyCode::Char('h') => {
-            app.history_entries = load_history(&app.log_file);
+            app.history_entries = vaults::load_history(&app.log_file);
             app.history_selected = 0;
             app.overlay = Some(Overlay::History);
             return;
@@ -2459,17 +2116,6 @@ fn truncate(s: &str, max: usize) -> String {
     format!("…{}", taken.into_iter().collect::<String>())
 }
 
-/// 当前运行的可执行文件路径（真实绝对路径），用于顶栏 `Bin:`。
-fn bin_path() -> String {
-    if let Ok(p) = std::env::current_exe() {
-        return p.to_string_lossy().to_string();
-    }
-    match std::env::args().next() {
-        Some(a) if !a.is_empty() => absolute_path(&a),
-        _ => "?".to_string(),
-    }
-}
-
 /// 在 `avail` 列内按自然长度比例给两个字符串分配预算，各自保留尾部截断。
 fn fit_two(a: &str, b: &str, avail: usize) -> (String, String) {
     let (aw, bw) = (Line::from(a).width(), Line::from(b).width());
@@ -2492,16 +2138,6 @@ fn fit_two(a: &str, b: &str, avail: usize) -> (String, String) {
     (truncate(a, a_max), truncate(b, avail - a_max))
 }
 
-fn shorten_home(s: &str) -> String {
-    if let Some(home) = std::env::var_os("HOME") {
-        let h = home.to_string_lossy();
-        if !h.is_empty() && s.starts_with(h.as_ref()) {
-            return format!("~{}", &s[h.len()..]);
-        }
-    }
-    s.to_string()
-}
-
 fn render_top_bar(f: &mut Frame, app: &App, area: Rect) {
     let w = area.width as usize;
     let cyan = Style::default().fg(Color::Cyan);
@@ -2514,7 +2150,7 @@ fn render_top_bar(f: &mut Frame, app: &App, area: Rect) {
     let (bin_label_w, cli_label_w) = (Line::from(bin_label).width(), Line::from(cli_label).width());
     let ver_w = Line::from(ver.as_str()).width();
     let avail1 = w.saturating_sub(bin_label_w + cli_label_w + sep_w + ver_w + 1);
-    let (bin, cli) = fit_two(&bin_path(), &resolved_cli_path(), avail1);
+    let (bin, cli) = fit_two(&paths::bin_path(), &paths::resolved_cli_path(), avail1);
     let used1 = bin_label_w
         + Line::from(bin.as_str()).width()
         + sep_w
@@ -3427,9 +3063,9 @@ fn render_help_overlay(f: &mut Frame, area: Rect, app: &App) {
 
     let repo_url = std::env::var("GOCRYPTFS_REPO")
         .unwrap_or_else(|_| env!("CARGO_PKG_REPOSITORY").to_string());
-    let cli = cli_path();
-    let data = shorten_home(&app.data_dir.to_string_lossy());
-    let cfg = shorten_home(&app.config);
+    let cli = paths::cli_path();
+    let data = paths::shorten_home(&app.data_dir.to_string_lossy());
+    let cfg = paths::shorten_home(&app.config);
 
     let text = vec![
         Line::from(Span::styled(
@@ -3958,7 +3594,7 @@ fn print_paths_lines(
     let row = |key: &'static str, value: String| format!("  {}{}", pad_label(t!(key), w), value);
 
     // 后端的来源：GOCRYPTFS_CLI > 内嵌释放副本 > PATH
-    let backend = cli_path();
+    let backend = paths::cli_path();
     let source = if std::env::var("GOCRYPTFS_CLI")
         .map(|v| !v.trim().is_empty())
         .unwrap_or(false)
@@ -3966,7 +3602,7 @@ fn print_paths_lines(
         t!("paths.source_env")
     } else if backend::embedded_path().is_some() {
         t!("paths.source_embedded")
-    } else if resolved_cli_path() != CLI_NAME {
+    } else if paths::resolved_cli_path() != CLI_NAME {
         t!("paths.source_path")
     } else {
         t!("paths.source_missing")
@@ -3975,7 +3611,7 @@ fn print_paths_lines(
 
     vec![
         t!("paths.header").to_string(),
-        row("paths.label_bin", bin_path()),
+        row("paths.label_bin", paths::bin_path()),
         row("paths.label_version", version_string()),
         row(
             "paths.label_backend",
@@ -4004,7 +3640,7 @@ fn print_help(
     history_file: &Path,
 ) {
     // 显示"实际会用的后端"：GOCRYPTFS_CLI > 内嵌释放副本 > PATH 中的 gocryptfs-cli
-    let cli_env = cli_path();
+    let cli_env = paths::cli_path();
     let editor = std::env::var("EDITOR").unwrap_or_else(|_| "nano".to_string());
     let current = |v: String| t!("clihelp.current", v);
 
@@ -4046,29 +3682,14 @@ fn print_version() {
 
 // ---------- 主入口 ----------
 
-/// 解析界面语言：`--lang` > `GOCRYPTFS_TUI_LANG` > 配置 `language:` > 系统 locale > 默认。
-fn resolve_lang(cli_lang: Option<&str>, config: &str) -> i18n::Lang {
-    let config_lang = if config.is_empty() {
-        String::new()
-    } else {
-        let primary = read_setting(config, "language", "");
-        if primary.is_empty() {
-            read_setting(config, "lang", "")
-        } else {
-            primary
-        }
-    };
-    i18n::resolve(cli_lang, Some(config_lang.as_str()))
-}
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let outcome = cli::parse(std::env::args().collect());
 
-    let data_dir = resolve_data_dir(outcome.opts.data_dir.clone());
+    let data_dir = paths::resolve_data_dir(outcome.opts.data_dir.clone());
     // 运行期状态（日志/历史）默认跟随 XDG_STATE_HOME；显式 -D/GOCRYPTFS_DATA_DIR 时与之合并
     let data_overridden =
         outcome.opts.data_dir.is_some() || std::env::var_os("GOCRYPTFS_DATA_DIR").is_some();
-    let state_dir = resolve_state_dir(&data_dir, data_overridden);
+    let state_dir = paths::resolve_state_dir(&data_dir, data_overridden);
 
     // 发行包不含 Shell 后端：运行 TUI 前先把内嵌副本释放到数据目录
     // （--help/--version 不写盘，只探测已释放的副本，保持只读）
@@ -4080,13 +3701,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         backend::peek_embedded(&data_dir);
     }
 
-    let config = resolve_config(outcome.opts.config.clone());
+    let config = paths::resolve_config(outcome.opts.config.clone());
     let log_file = state_dir.join("app.log.jsonl");
     let history_file = state_dir.join("history.jsonl");
     let help_file = data_dir.join("HELP.md");
 
     // 语言必须在任何用户可见输出之前确定
-    i18n::set_lang(resolve_lang(outcome.opts.lang.as_deref(), &config));
+    i18n::set_lang(config::resolve_lang(outcome.opts.lang.as_deref(), &config));
 
     if let Some(err) = &outcome.error {
         if !matches!(outcome.action, cli::Action::Help | cli::Action::Version) {
@@ -4141,8 +3762,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if state_dir != data_dir {
         let _ = std::fs::create_dir_all(&state_dir);
     }
-    migrate_runtime_files(&data_dir, &state_dir);
-    migrate_old_history(&state_dir);
+    paths::migrate_runtime_files(&data_dir, &state_dir);
+    paths::migrate_old_history(&state_dir);
 
     std::env::set_var("HISTORY_FILE", &history_file);
 

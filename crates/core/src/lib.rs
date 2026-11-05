@@ -1,10 +1,14 @@
 #![allow(dead_code)]
 
 pub mod backend;
+pub mod config;
 pub mod deps;
 #[macro_use]
 pub mod i18n;
 pub mod logger;
+pub mod paths;
+pub mod protocol;
+pub mod vaults;
 
 pub const PROJECT_NAME: &str = "gocryptfs-ui";
 /// 历史命名：配置/数据/状态目录与显示名都用它

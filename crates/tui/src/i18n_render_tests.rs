@@ -10,6 +10,10 @@
 
 use crate::*;
 use gocryptfs_ui_core::i18n::test_support::lock_lang;
+use gocryptfs_ui_core::paths::{
+    absolute_path, bin_path, cli_path_from, migrate_runtime_files, resolve_config,
+    resolved_cli_path,
+};
 use ratatui::backend::TestBackend;
 
 fn test_app() -> App {
