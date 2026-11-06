@@ -75,6 +75,10 @@ pub struct AppState {
     pub token_mtime: Arc<Mutex<Option<std::time::SystemTime>>>,
     /// 对外可访问的基址，例如 `http://127.0.0.1:30032`。
     pub listen_url: String,
+    /// 用户配置的对外公开基址（`--public-url`，反代后使用），优先于 listen_url。
+    pub public_url: Option<String>,
+    /// 是否信任反向代理头（X-Forwarded-Proto / Host / For）。
+    pub trust_proxy: bool,
     /// 一次性登录 nonce → 签发时间。
     pub nonces: Arc<Mutex<HashMap<String, Instant>>>,
     /// 进程内登录限流器。
@@ -156,6 +160,8 @@ impl AppState {
             auth_mtime: Arc::new(Mutex::new(None)),
             token_mtime: Arc::new(Mutex::new(None)),
             listen_url: format!("http://{DEFAULT_LISTEN}"),
+            public_url: None,
+            trust_proxy: false,
             nonces: Arc::new(Mutex::new(HashMap::new())),
             rate_limiter: Arc::new(Mutex::new(auth::RateLimiter::default())),
             sessions: Arc::new(Mutex::new(HashMap::new())),
@@ -227,7 +233,13 @@ impl AppState {
     }
 
     pub fn login_url(&self, nonce: &str) -> String {
-        format!("{}/#t={nonce}", self.listen_url.trim_end_matches('/'))
+        format!(
+            "{}/#t={nonce}",
+            self.public_url
+                .as_deref()
+                .unwrap_or(&self.listen_url)
+                .trim_end_matches('/')
+        )
     }
 }
 
@@ -328,6 +340,46 @@ fn origin_host(origin: &str) -> Option<String> {
     }
 }
 
+/// 反向代理后的实际 Host（信任代理时优先 `X-Forwarded-Host`）。
+fn effective_host(state: &AppState, headers: &HeaderMap) -> Option<String> {
+    if state.trust_proxy {
+        if let Some(xfh) = headers
+            .get("x-forwarded-host")
+            .and_then(|v| v.to_str().ok())
+        {
+            if let Some(first) = xfh
+                .split(',')
+                .next()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                return Some(first.to_ascii_lowercase());
+            }
+        }
+    }
+    headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .map(|h| h.trim().to_ascii_lowercase())
+        .filter(|h| !h.is_empty())
+}
+
+/// `Origin` 是否与请求 Host 或配置的 public-url 匹配。
+fn origin_allowed(state: &AppState, origin: &str, headers: &HeaderMap) -> bool {
+    let Some(origin_authority) = origin_host(origin) else {
+        return false;
+    };
+    if effective_host(state, headers).as_deref() == Some(origin_authority.as_str()) {
+        return true;
+    }
+    state
+        .public_url
+        .as_deref()
+        .and_then(origin_host)
+        .map(|h| h == origin_authority)
+        .unwrap_or(false)
+}
+
 async fn auth_mw(
     State(state): State<AppState>,
     req: Request<axum::body::Body>,
@@ -361,13 +413,7 @@ async fn auth_mw(
             .get(header::ORIGIN)
             .and_then(|v| v.to_str().ok())
         {
-            let host = req
-                .headers()
-                .get(header::HOST)
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("")
-                .to_ascii_lowercase();
-            if origin_host(origin).as_deref() != Some(host.as_str()) {
+            if !origin_allowed(&state, origin, req.headers()) {
                 return forbidden("origin mismatch");
             }
         }
@@ -415,12 +461,39 @@ struct LoginRequest {
     totp: Option<String>,
 }
 
-fn session_response(state: &AppState, user: Option<&str>) -> Response {
+/// 请求是否可视为 HTTPS：反代（信任时）转发 `X-Forwarded-Proto: https`，
+/// 或配置的 `--public-url` 本身就是 https。
+fn request_is_secure(state: &AppState, headers: &HeaderMap) -> bool {
+    if state.trust_proxy {
+        let proto = headers
+            .get("x-forwarded-proto")
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.trim().to_ascii_lowercase());
+        if proto.as_deref() == Some("https") {
+            return true;
+        }
+    }
+    state
+        .public_url
+        .as_deref()
+        .map(|u| u.starts_with("https://"))
+        .unwrap_or(false)
+}
+
+fn session_cookie(state: &AppState, headers: &HeaderMap, value: &str, max_age: u64) -> String {
+    let secure = if request_is_secure(state, headers) {
+        "; Secure"
+    } else {
+        ""
+    };
+    format!(
+        "{SESSION_COOKIE}={value}; HttpOnly; SameSite=Strict; Path=/{secure}; Max-Age={max_age}"
+    )
+}
+
+fn session_response(state: &AppState, user: Option<&str>, headers: &HeaderMap) -> Response {
     let session = state.start_session(user);
-    let cookie = format!(
-        "{SESSION_COOKIE}={session}; HttpOnly; SameSite=Strict; Path=/; Max-Age={}",
-        SESSION_TTL.as_secs()
-    );
+    let cookie = session_cookie(state, headers, &session, SESSION_TTL.as_secs());
     (StatusCode::NO_CONTENT, [(header::SET_COOKIE, cookie)]).into_response()
 }
 
@@ -472,13 +545,30 @@ fn audit(state: &AppState, action: &str, target: &str, result: &str, detail: &st
     }
 }
 
-fn client_ip(conn: Option<ConnectInfo<SocketAddr>>) -> String {
+fn client_ip(
+    state: &AppState,
+    headers: &HeaderMap,
+    conn: Option<ConnectInfo<SocketAddr>>,
+) -> String {
+    if state.trust_proxy {
+        if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+            if let Some(first) = xff
+                .split(',')
+                .next()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                return first.to_string();
+            }
+        }
+    }
     conn.map(|ConnectInfo(addr)| addr.ip().to_string())
         .unwrap_or_else(|| "unknown".to_string())
 }
 
 fn password_login(
     state: &AppState,
+    headers: &HeaderMap,
     ip: &str,
     username: &str,
     password: &str,
@@ -549,12 +639,13 @@ fn password_login(
         .unwrap()
         .record_success(ip, username);
     audit(state, "login", username, "success", "password");
-    session_response(state, Some(username))
+    session_response(state, Some(username), headers)
 }
 
 async fn login(
     State(state): State<AppState>,
     conn: Option<ConnectInfo<SocketAddr>>,
+    headers: HeaderMap,
     Json(body): Json<LoginRequest>,
 ) -> Response {
     state.reload_auth_if_changed();
@@ -562,7 +653,7 @@ async fn login(
         if state.tokens.lock().unwrap().verify(token) {
             // 兼容既有日志测试：token 登录成功不写入 app.log.jsonl，
             // 仅记录失败，避免改变 /api/logs 的既有语义。
-            return session_response(&state, None);
+            return session_response(&state, None, &headers);
         }
         audit(&state, "login", "token", "failed", "invalid token");
         return unauthorized();
@@ -574,13 +665,20 @@ async fn login(
             return unauthorized();
         }
         audit(&state, "login", "login-link", "success", "nonce");
-        return session_response(&state, None);
+        return session_response(&state, None, &headers);
     }
 
     if let Some(username) = body.username.as_deref() {
-        let ip = client_ip(conn);
+        let ip = client_ip(&state, &headers, conn);
         let password = body.password.as_deref().unwrap_or("");
-        return password_login(&state, &ip, username, password, body.totp.as_deref());
+        return password_login(
+            &state,
+            &headers,
+            &ip,
+            username,
+            password,
+            body.totp.as_deref(),
+        );
     }
 
     invalid_credentials()
@@ -591,7 +689,7 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
         state.sessions.lock().unwrap().remove(&session);
         state.session_users.lock().unwrap().remove(&session);
     }
-    let cookie = format!("{SESSION_COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0");
+    let cookie = session_cookie(&state, &headers, "", 0);
     (StatusCode::NO_CONTENT, [(header::SET_COOKIE, cookie)]).into_response()
 }
 
@@ -599,19 +697,25 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
 // 一次性登录链接 / 认证状态
 // ============================================================
 
-fn request_base_url(headers: &HeaderMap, fallback: &str) -> String {
-    headers
-        .get(header::HOST)
-        .and_then(|v| v.to_str().ok())
-        .map(str::trim)
-        .filter(|h| !h.is_empty())
-        .map(|h| format!("http://{h}"))
-        .unwrap_or_else(|| fallback.trim_end_matches('/').to_string())
+fn request_base_url(state: &AppState, headers: &HeaderMap) -> String {
+    if let Some(public_url) = &state.public_url {
+        return public_url.trim_end_matches('/').to_string();
+    }
+    let https = state.trust_proxy
+        && headers
+            .get("x-forwarded-proto")
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.trim().eq_ignore_ascii_case("https"))
+            .unwrap_or(false);
+    match effective_host(state, headers) {
+        Some(host) => format!("{}://{host}", if https { "https" } else { "http" }),
+        None => state.listen_url.trim_end_matches('/').to_string(),
+    }
 }
 
 async fn login_links(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let nonce = state.issue_login_nonce();
-    let base = request_base_url(&headers, &state.listen_url);
+    let base = request_base_url(&state, &headers);
     let url = format!("{base}/#t={nonce}");
     let svg = match auth::qr_svg(&url) {
         Ok(svg) => svg,
@@ -879,6 +983,8 @@ async fn meta(State(state): State<AppState>) -> Response {
             "history": state.state_dir.join("history.jsonl").to_string_lossy(),
         },
         "deps": { "ok": ok, "missing": missing },
+        "public_url": state.public_url,
+        "trust_proxy": state.trust_proxy,
     }))
     .into_response()
 }
@@ -1362,6 +1468,9 @@ fn usage() {
     println!();
     println!("OPTIONS:");
     println!("    --listen ADDR       listen address (default {DEFAULT_LISTEN})");
+    println!("    --public-url URL   public base URL used in QR/one-time links");
+    println!("                       (e.g. https://example.com, behind a reverse proxy)");
+    println!("    --trust-proxy      trust X-Forwarded-Proto/Host/For from a reverse proxy");
     println!(
         "    --token-file PATH   token file (default <config_dir>/{}/web.token)",
         core::APP_NAME
@@ -1433,6 +1542,8 @@ enum Command {
 #[derive(Debug)]
 struct CliOptions {
     listen: String,
+    public_url: Option<String>,
+    trust_proxy: bool,
     token_file: Option<PathBuf>,
     config_arg: Option<PathBuf>,
     data_arg: Option<PathBuf>,
@@ -1443,6 +1554,19 @@ enum Parsed {
     Help,
     Version,
     Run(CliOptions),
+}
+
+/// 规范化 `--public-url`：只允许 http(s) URL，去掉结尾 `/`。
+fn normalize_public_url(value: &str) -> Result<String, String> {
+    let v = value.trim().trim_end_matches('/');
+    let rest = v.split_once("://").map(|(_, r)| r).unwrap_or("");
+    let scheme_ok = v.starts_with("http://") || v.starts_with("https://");
+    if !scheme_ok || rest.is_empty() || rest.contains('/') {
+        return Err(format!(
+            "--public-url must be a base http(s) URL like https://example.com, got {value:?}"
+        ));
+    }
+    Ok(v.to_string())
 }
 
 fn next_value(args: &[String], i: &mut usize, name: &str) -> Result<String, String> {
@@ -1535,6 +1659,8 @@ fn parse_user_command(
 
 fn parse_args(args: &[String]) -> Result<Parsed, String> {
     let mut listen = DEFAULT_LISTEN.to_string();
+    let mut public_url: Option<String> = None;
+    let mut trust_proxy = false;
     let mut token_file: Option<PathBuf> = None;
     let mut config_arg: Option<PathBuf> = None;
     let mut data_arg: Option<PathBuf> = None;
@@ -1554,6 +1680,10 @@ fn parse_args(args: &[String]) -> Result<Parsed, String> {
         }
         if let Some(value) = arg.strip_prefix("--listen=") {
             listen = value.to_string();
+        } else if let Some(value) = arg.strip_prefix("--public-url=") {
+            public_url = Some(normalize_public_url(value)?);
+        } else if arg == "--trust-proxy" {
+            trust_proxy = true;
         } else if let Some(value) = arg.strip_prefix("--token-file=") {
             token_file = Some(PathBuf::from(value));
         } else if let Some(value) = arg.strip_prefix("--config=") {
@@ -1567,6 +1697,14 @@ fn parse_args(args: &[String]) -> Result<Parsed, String> {
         } else {
             match arg {
                 "--listen" => listen = next_value(args, &mut i, "--listen")?,
+                "--public-url" => {
+                    public_url = Some(normalize_public_url(&next_value(
+                        args,
+                        &mut i,
+                        "--public-url",
+                    )?)?)
+                }
+                "--trust-proxy" => trust_proxy = true,
                 "--token-file" => {
                     token_file = Some(PathBuf::from(next_value(args, &mut i, "--token-file")?))
                 }
@@ -1609,6 +1747,8 @@ fn parse_args(args: &[String]) -> Result<Parsed, String> {
 
     Ok(Parsed::Run(CliOptions {
         listen,
+        public_url,
+        trust_proxy,
         token_file,
         config_arg,
         data_arg,
@@ -1760,6 +1900,8 @@ async fn shutdown_signal() {
 
 fn serve(
     listen: String,
+    public_url: Option<String>,
+    trust_proxy: bool,
     token_path: PathBuf,
     config_arg: Option<PathBuf>,
     data_arg: Option<PathBuf>,
@@ -1795,9 +1937,22 @@ fn serve(
     *state.auth_mtime.lock().unwrap() = file_mtime(&state.auth_path);
     *state.token_mtime.lock().unwrap() = file_mtime(&state.token_path);
     state.listen_url = format!("http://{addr}");
+    state.public_url = public_url;
+    state.trust_proxy = trust_proxy;
 
     println!("gocryptfs-web {}", core::version_string());
     println!("listen:     {}", state.listen_url);
+    if let Some(public_url) = &state.public_url {
+        println!("public url: {public_url}");
+    }
+    println!(
+        "trust proxy: {}",
+        if state.trust_proxy {
+            "yes (X-Forwarded-* honored)"
+        } else {
+            "no"
+        }
+    );
     if let Some(token) = new_token {
         println!("token:      {token}");
     }
@@ -1892,6 +2047,8 @@ pub fn run() {
 
     let CliOptions {
         listen,
+        public_url,
+        trust_proxy,
         token_file,
         config_arg,
         data_arg,
@@ -1902,7 +2059,14 @@ pub fn run() {
     let result = match command {
         Command::Token(cmd) => run_token_command(&token_path, cmd),
         Command::User(cmd) => run_user_command(&token_path, cmd),
-        Command::Serve => serve(listen, token_path, config_arg, data_arg),
+        Command::Serve => serve(
+            listen,
+            public_url,
+            trust_proxy,
+            token_path,
+            config_arg,
+            data_arg,
+        ),
     };
     if let Err(e) = result {
         eprintln!("error: {e}");
@@ -1921,5 +2085,96 @@ mod lang_tests {
         assert_eq!(normalize_lang(Some("zh")), None);
         assert_eq!(normalize_lang(Some("fr-FR")), None);
         assert_eq!(normalize_lang(None), None);
+    }
+}
+
+#[cfg(test)]
+mod proxy_tests {
+    use super::*;
+    use axum::http::header::{HeaderName, HeaderValue};
+
+    fn state() -> AppState {
+        AppState::new(
+            "tok".to_string(),
+            "/tmp/config.yaml".to_string(),
+            PathBuf::from("/tmp/data"),
+            true,
+            PathBuf::from("/tmp/state"),
+        )
+    }
+
+    fn headers(pairs: &[(&str, &str)]) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        for (k, v) in pairs {
+            h.insert(
+                HeaderName::from_bytes(k.as_bytes()).unwrap(),
+                HeaderValue::from_str(v).unwrap(),
+            );
+        }
+        h
+    }
+
+    #[test]
+    fn public_url_wins_for_links_and_cookies() {
+        let mut st = state();
+        st.public_url = Some("https://example.com".to_string());
+        let h = headers(&[("host", "127.0.0.1:30032")]);
+        assert_eq!(request_base_url(&st, &h), "https://example.com");
+        assert!(request_is_secure(&st, &h));
+        assert!(session_cookie(&st, &h, "s", 10).contains("Secure"));
+    }
+
+    #[test]
+    fn forwarded_proto_only_honored_when_trusted() {
+        let h = headers(&[("host", "nas.lan"), ("x-forwarded-proto", "https")]);
+        let plain = state();
+        assert_eq!(request_base_url(&plain, &h), "http://nas.lan");
+        assert!(!request_is_secure(&plain, &h));
+        assert!(!session_cookie(&plain, &h, "s", 10).contains("Secure"));
+
+        let mut trusted = state();
+        trusted.trust_proxy = true;
+        assert_eq!(request_base_url(&trusted, &h), "https://nas.lan");
+        assert!(request_is_secure(&trusted, &h));
+        assert!(session_cookie(&trusted, &h, "s", 10).contains("Secure"));
+    }
+
+    #[test]
+    fn x_forwarded_for_only_honored_when_trusted() {
+        let h = headers(&[("x-forwarded-for", "203.0.113.9, 10.0.0.1")]);
+        assert_eq!(client_ip(&state(), &h, None), "unknown");
+        let mut trusted = state();
+        trusted.trust_proxy = true;
+        assert_eq!(client_ip(&trusted, &h, None), "203.0.113.9");
+    }
+
+    #[test]
+    fn origin_allowed_via_forwarded_host_or_public_url() {
+        let h = headers(&[
+            ("host", "127.0.0.1:30032"),
+            ("x-forwarded-host", "example.com"),
+        ]);
+        assert!(!origin_allowed(&state(), "https://example.com", &h));
+        let mut trusted = state();
+        trusted.trust_proxy = true;
+        assert!(origin_allowed(&trusted, "https://example.com", &h));
+
+        let mut public = state();
+        public.public_url = Some("https://example.com".to_string());
+        let local = headers(&[("host", "127.0.0.1:30032")]);
+        assert!(origin_allowed(&public, "https://example.com", &local));
+        assert!(!origin_allowed(&public, "https://evil.example", &local));
+    }
+
+    #[test]
+    fn public_url_normalization() {
+        assert_eq!(
+            normalize_public_url("https://example.com/").unwrap(),
+            "https://example.com"
+        );
+        assert!(normalize_public_url("example.com").is_err());
+        assert!(normalize_public_url("https://example.com/app").is_err());
+        assert!(normalize_public_url("ftp://example.com").is_err());
+        assert!(normalize_public_url("https://").is_err());
     }
 }

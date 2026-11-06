@@ -730,6 +730,14 @@ systemctl --user daemon-reload && systemctl --user enable --now gocryptfs-web
 > https://vaults.example.com { reverse_proxy 127.0.0.1:30032 }
 > ```
 
+**Access from Windows / macOS / phone**: the Web UI is a pure browser client — the server stays on
+the Linux host that owns the FUSE mounts, and Windows/macOS/phones only need a browser. Put a TLS
+reverse proxy in front (Caddy/Nginx, `example.com`), start the server with
+`--public-url https://example.com --trust-proxy`, and open `https://example.com`. This also makes
+the terminal QR code and the "phone login" link reachable from other devices. See
+[docs/remote-access.md](docs/remote-access.md) for Caddy/Nginx configs, the Windows client
+checklist and troubleshooting.
+
 **Security defaults**: loopback-only listen, token/cookie sessions (`HttpOnly`, `SameSite=Strict`),
 CSRF header check on writes, CSP/no-sniff/referrer-policy headers, passphrases only travel through
 stdin to `gocryptfs-cli` (never stored or logged).

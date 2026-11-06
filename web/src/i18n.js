@@ -164,6 +164,12 @@ const en = {
   'meta.depsMissing': 'missing',
   'meta.unknown': 'unknown',
   'meta.noDeps': 'No dependency information reported.',
+  'meta.remote': 'Remote access',
+  'meta.publicUrl': 'Public URL',
+  'meta.notSet': 'not set',
+  'meta.trustProxy': 'Trust proxy headers',
+  'meta.trustProxyOn': 'yes',
+  'meta.trustProxyOff': 'no',
   'meta.loadFailed': 'Could not load server information.',
 
   // security / 2FA ----------------------------------------------------------
@@ -359,6 +365,12 @@ const zh = {
   'meta.depsMissing': '缺失',
   'meta.unknown': '未知',
   'meta.noDeps': '服务器未提供依赖信息。',
+  'meta.remote': '远程访问',
+  'meta.publicUrl': '对外地址',
+  'meta.notSet': '未设置',
+  'meta.trustProxy': '信任代理头',
+  'meta.trustProxyOn': '是',
+  'meta.trustProxyOff': '否',
   'meta.loadFailed': '无法加载服务器信息。',
 
   // security / 2FA ----------------------------------------------------------

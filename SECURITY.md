@@ -82,6 +82,9 @@ control over every configured vault.
 - **Passphrases**: entered in the browser, POSTed over the connection and handed to
   `gocryptfs-cli` through stdin. They are never stored, logged, or sent back to the client.
 - **Not a file server**: the Web UI manages mount lifecycle; it does not stream plaintext files.
+- **Reverse proxy trust**: `--trust-proxy` makes the server honor `X-Forwarded-Proto/Host/For`.
+  Only enable it behind your own proxy — otherwise a client could spoof its IP (defeating rate
+  limiting) or its origin host. Keep it off when unsure and set `--public-url` for correct links.
 - **Do not expose it to the internet** without TLS and authentication in front of it; a
   compromised web session can unmount every vault and mount arbitrary configured vaults.
 

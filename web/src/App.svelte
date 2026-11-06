@@ -1152,6 +1152,16 @@
           </div>
 
           <div class="card">
+            <h3>{tr('meta.remote')}</h3>
+            <dl class="kv">
+              <dt>{tr('meta.publicUrl')}</dt>
+              <dd class="mono">{meta.public_url ?? tr('meta.notSet')}</dd>
+              <dt>{tr('meta.trustProxy')}</dt>
+              <dd>{meta.trust_proxy ? tr('meta.trustProxyOn') : tr('meta.trustProxyOff')}</dd>
+            </dl>
+          </div>
+
+          <div class="card">
             <h3>{tr('meta.paths')}</h3>
             <dl class="kv">
               {#each ['config', 'data', 'state', 'log', 'history'] as key}

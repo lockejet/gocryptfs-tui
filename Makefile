@@ -136,6 +136,10 @@ web-clean:  ## 清空 Web UI 构建产物
 test-install: build  ## 安装/卸载回归测试（install.sh，本地源码模式）
 	bash test/test-install.sh
 
+.PHONY: test-web-proxy
+test-web-proxy: build  ## 反向代理场景测试（--public-url / --trust-proxy）
+	bash test/test-web-proxy.sh
+
 .PHONY: test-env
 test-env:  ## 生成 shell 测试环境（/tmp/gocryptfs-tui-test/）
 	bash test/create-test-env.sh
@@ -146,7 +150,7 @@ test-env-clean:  ## 清理 shell 测试环境
 	bash test/cleanup-test-env.sh
 
 .PHONY: verify
-verify: check test-i18n test-cli test-install  ## 完整验证：静态检查 + 单元测试 + i18n + CLI/安装测试
+verify: check test-i18n test-cli test-install test-web-proxy  ## 完整验证：静态检查 + 单元测试 + i18n + CLI/安装/反代测试
 	@echo ">>> 验证二进制:"
 	@$(BUILD_DIR)/$(BIN) --version || true
 	@echo ">>> 全部通过"

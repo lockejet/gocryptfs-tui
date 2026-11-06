@@ -725,6 +725,12 @@ systemctl --user daemon-reload && systemctl --user enable --now gocryptfs-web
 > https://vaults.example.com { reverse_proxy 127.0.0.1:30032 }
 > ```
 
+**从 Windows / macOS / 手机访问**：Web UI 是纯浏览器客户端——服务端留在拥有 FUSE 挂载的 Linux 主机上，
+Windows/macOS/手机只需要浏览器。前面放一个 TLS 反向代理（Caddy/Nginx，域名示例 `example.com`），
+启动时加 `--public-url https://example.com --trust-proxy`，然后浏览器打开 `https://example.com`。
+这样终端二维码和「手机登录」链接也能被其他设备访问。反代配置、Windows 客户端清单与排错见
+[docs/remote-access.zh-CN.md](docs/remote-access.zh-CN.md)。
+
 **安全默认值**：仅回环监听、token/cookie 会话（`HttpOnly`、`SameSite=Strict`）、写操作 CSRF 头校验、
 CSP/no-sniff/referrer-policy 响应头、口令只经 stdin 传给 `gocryptfs-cli`（不落盘、不入日志）。
 
