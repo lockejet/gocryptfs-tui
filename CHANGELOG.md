@@ -2,7 +2,7 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/)。
 
-## [0.7.1] - 2026-11-06
+## [0.8.0] - 2026-11-06
 
 **安装 / Install** — 用户级装到 `~/.local/bin`（默认，无需 sudo），系统级加 `--system` 装到 `/usr/local/bin`：
 
@@ -14,14 +14,18 @@ curl -LsSf https://github.com/lockejet/gocryptfs-ui/releases/latest/download/goc
 预编译包（x86_64/aarch64 glibc、x86_64 musl）、`source.tar.gz` 与 sha256 校验和见下方 Assets；git clone 与源码编译两种方式见 [README](https://github.com/lockejet/gocryptfs-ui#installation)。
 
 ### Features
-- **Web UI 支持中英文切换**：全部界面文案 i18n 化（163 个键，中英目录自动校验一致性），
-  默认跟随浏览器语言、选择持久化；顶栏与登录页均有语言切换按钮；挂载/卸载任务的
-  CLI 日志也会按界面语言本地化（`-l` 传给后端）
-- **2FA 默认关闭**：登录后若当前账户未启用两步验证，界面显示提示（可「立即启用」跳到安全页
-  或「稍后」），安全页显示启用状态与剩余备份码；token 登录且未配置用户时提示可用方式
+- **Web UI 远程访问（反向代理）支持**：新增 `--public-url URL`（终端二维码、一次性登录链接使用对外
+  地址，例如 `https://example.com`）与 `--trust-proxy`（信任 `X-Forwarded-Proto/Host/For`：`https`
+  时 cookie 自动加 `Secure`、CSRF `Origin` 校验接受转发 Host、登录限流按真实客户端 IP 计数）
+- 新增 `docs/remote-access.md`（中英）：拓扑、Caddy/Nginx 反代示例（`example.com`）、Windows 客户端
+  清单、安全核对表与排错；README「Web UI」补「从 Windows/macOS/手机访问」小节
+- Web UI 信息页显示对外地址与代理信任状态
+- 新增 `test/test-web-proxy.sh`（13 项反代场景测试）并纳入 `make verify`
 
-### Bug Fixes
-- 修复**英文界面混入中文**的问题（`手机登录` 等硬编码中文），改为统一走 i18n 词表
+## [0.7.1] - 2026-11-06
+
+### Documentation
+- 更新 CHANGELOG
 
 ## [0.7.0] - 2026-11-05
 
